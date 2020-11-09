@@ -30,6 +30,8 @@ module Pulljoy
     ACTION_SYNCHRONIZE = 'synchronize'
     ACTION_REOPENED = 'reopened'
 
+    transform_keys(&:to_sym)
+
     attribute :action, Types::Strict::String
     attribute :number, Types::Strict::Integer
     attribute :repository, Repository
@@ -40,6 +42,8 @@ module Pulljoy
   class IssueCommentEvent < Dry::Struct
     # Possible values for 'action'
     ACTION_CREATED = 'created'
+
+    transform_keys(&:to_sym)
 
     attribute :action, Types::Strict::String
     attribute :repository, Repository
@@ -56,6 +60,8 @@ module Pulljoy
 
   class CheckSuiteEvent < Dry::Struct
     ACTION_COMPLETED = 'completed'
+
+    transform_keys(&:to_sym)
 
     attribute :action, Types::Strict::String
     attribute :repository, Repository

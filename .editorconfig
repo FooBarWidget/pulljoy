@@ -13,6 +13,14 @@ insert_final_newline = true
 indent_style = space
 indent_size = 2
 
+[config.ru]
+indent_style = space
+indent_size = 2
+
 [Gemfile]
+indent_style = space
+indent_size = 2
+
+[bin/pulljoy]
 indent_style = space
 indent_size = 2

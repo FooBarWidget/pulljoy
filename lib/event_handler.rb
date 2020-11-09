@@ -6,7 +6,7 @@ require 'dry-struct'
 require_relative 'types'
 require_relative 'github_api_types'
 require_relative 'command_parser'
-require_relative 'bug_error'
+require_relative 'utils'
 
 module Pulljoy
   class EventHandler
@@ -15,18 +15,19 @@ module Pulljoy
     STATE_AWAITING_MANUAL_REVIEW = 'awaiting_manual_review'
     STATE_WAITING_FOR_CI = 'waiting_for_ci'
     STATE_STANDING_BY = 'standing_by'
-    STATE_CLOSED = 'closed'
 
     class Context < Dry::Struct
       attribute :github_node_id, Types::Strict::String
       attribute :repo_full_name, Types::Strict::String
       attribute :pr_num, Types::Strict::Integer
-      attribute :event_source_author, Types::Strict::String.optional
-      attribute :event_source_comment_id, Types::Strict::Integer.optional
+      attribute? :event_source_author, Types::Strict::String.optional
+      attribute? :event_source_comment_id, Types::Strict::Integer.optional
     end
 
     class State < Dry::Struct
-      attribute :review_id, Types::Strict::String
+      attribute :state_name, Types::Strict::String
+      attribute? :review_id, Types::Strict::String.optional
+      attribute? :commit_sha, Types::Strict::String.optional
     end
 
 
@@ -34,10 +35,11 @@ module Pulljoy
     # @param octokit [Octokit::Client]
     # @param my_username [String]
     # @param log_unexpected_exceptions [Boolean]
-    def initialize(config:, octokit:, my_username:,
+    def initialize(config:, octokit:, logger:, my_username:,
         log_unexpected_exceptions: false)
       @config = config
       @octokit = octokit
+      @logger = logger
       @my_username = my_username
       @log_unexpected_exceptions = log_unexpected_exceptions
     end
@@ -66,6 +68,8 @@ module Pulljoy
             process_pull_request_synchronize_event(event)
           when PullRequestEvent::ACTION_CLOSED
             process_pull_request_closed_event(event)
+          else
+            log_debug("Ignoring '#{event.action}' action")
           end
 
         when IssueCommentEvent
@@ -78,12 +82,11 @@ module Pulljoy
           )
           log_event(event)
 
-          # TODO: filter out only PR comments
-          # TODO: check whether we already knew about this PR
-
           case event.action
           when IssueCommentEvent::ACTION_CREATED
             process_issue_comment_created_event(event)
+          else
+            log_debug("Ignoring '#{event.action}' action")
           end
 
         when CheckSuiteEvent
@@ -92,6 +95,8 @@ module Pulljoy
           case event.action
           when CheckSuiteEvent::ACTION_COMPLETED
             process_check_suite_completed_event(event)
+          else
+            log_debug("Ignoring '#{event.action}' action")
           end
 
         else
@@ -111,48 +116,37 @@ module Pulljoy
   private
     # @param event [PullRequestEvent]
     def process_pull_request_opened_event(event)
+      log_debug("Processing 'open' action")
       review_id = generate_review_id
       request_manual_review(review_id)
-      reset_state(
-        state_name: STATE_AWAITING_MANUAL_REVIEW,
-        review_id: review_id,
-      )
     end
 
     # @param event [PullRequestEvent]
     def process_pull_request_reopened_event(event)
+      log_debug("Processing 'reopen' action")
       review_id = generate_review_id
       request_manual_review(review_id)
-      reset_state(
-        state_name: STATE_AWAITING_MANUAL_REVIEW,
-        review_id: review_id,
-      )
     end
 
     # @param event [PullRequestEvent]
     def process_pull_request_synchronize_event(event)
-      load_state
+      log_debug("Processing 'synchronize' action")
+      return if !load_state
 
       case @state.state_name
       when STATE_AWAITING_MANUAL_REVIEW
         review_id = generate_review_id
         request_manual_review(review_id)
-        update_state(review_id: review_id)
 
       when STATE_WAITING_FOR_CI
-        cancel_ci_run(event.repository)
+        cancel_ci_run
         delete_local_branch(event.repository)
         review_id = generate_review_id
         request_manual_review(review_id)
-        update_state(review_id: review_id)
 
       when STATE_STANDING_BY
         review_id = generate_review_id
         request_manual_review(review_id)
-        update_state(
-          state: STATE_AWAITING_MANUAL_REVIEW,
-          review_id: review_id,
-        )
 
       else
         raise BugError, "in unexpected state #{@state.state_name}"
@@ -161,9 +155,11 @@ module Pulljoy
 
     # @param event [PullRequestEvent]
     def process_pull_request_closed_event(event)
-      load_state
+      log_debug("Processing 'closed' action")
+      return if !load_state
+
       if state.state_name == STATE_WAITING_FOR_CI
-        cancel_ci_run(event.repository)
+        cancel_ci_run
         delete_local_branch(event.repository)
       end
       reset_state
@@ -171,11 +167,13 @@ module Pulljoy
 
     # @param event [IssueCommentEvent]
     def process_issue_comment_created_event(event)
+      log_debug("Processing 'created' action")
+      return if !load_state
+
       if is_myself?(@context.event_source_author)
-        log_debug("Ignoring comment by myself")
+        log_debug('Ignoring comment by myself')
         return
       end
-
       if !is_user_authorized?(@context.event_source_author)
         log_debug('Ignoring comment: user not authorized to send commands',
           username: @context.event_source_author)
@@ -190,9 +188,11 @@ module Pulljoy
       end
 
       if command.nil?
-        log_debug("Ignoring comment: no command found in comment")
+        log_debug('Ignoring comment: no command found in comment')
         return
       end
+
+      log_debug('Command parsed', command_type: command.class.to_s)
 
       case command
       when ApproveCommand
@@ -205,7 +205,13 @@ module Pulljoy
     # @param event [IssueCommentEvent]
     # @param command [ApproveCommand]
     def process_approve_command(event, command)
-      load_state
+      return if !load_state
+
+      if @state.state_name != STATE_AWAITING_MANUAL_REVIEW
+        log_debug("Ignoring command: currently not in #{STATE_AWAITING_MANUAL_REVIEW} state")
+        return
+      end
+
       if command.review_id == @state.review_id
         pr = PullRequest.new(@octokit.pull_request(
           event.repository.full_name, event.issue.number).to_hash)
@@ -219,45 +225,15 @@ module Pulljoy
 
     # @param event [CheckSuiteEvent]
     def process_check_suite_completed_event(event)
+      log_debug("Processing 'completed' action")
+
       if event.check_suite.pull_requests.empty?
         log_debug('No pull requests found in this event')
         return
       end
 
       event.check_suite.pull_requests do |pr|
-        set_context(
-          github_node_id: event.check_suite.node_id,
-          repo_full_name: event.repository.full_name,
-          pr_num: pr.number,
-        )
-
-        load_state
-        if @state.state_name != STATE_WAITING_FOR_CI
-          log_debug("Ignoring PR because state is not #{STATE_WAITING_FOR_CI}",
-            state: @state.state_name)
-          next
-        end
-
-        if state.commit_sha != event.check_suite.commit_sha
-          log_info('Ignoring PR because the commit for which the check suite was completed, is not the one we expect',
-            expected_commit: state.commit_sha,
-            actual_commit: event.check_suite.commit_sha)
-          return
-        end
-
-        if !all_check_suites_completed?(event.check_suite_commit_sha)
-          log_info('Ignoring PR because not all check suites are completed')
-          return
-        end
-
-        log_debug('Processing PR')
-        short_sha = shorten_commit_sha(event.check_suite.head_sha)
-        overall_conclusion = get_overall_check_suites_conclusion(event.check_suite.head_sha)
-        check_runs = @octokit.check_runs_for_ref(repo.full_name, short_sha)
-        delete_local_branch
-        post_comment("CI run for #{short_sha} completed.\n\n" \
-          " * Conclusion: #{overall_conclusion}\n" +
-          render_check_run_conclusions_markdown_list(check_runs))
+        process_check_suite_completed_event_for_pr(event, pr)
       end
     end
 
@@ -268,6 +244,58 @@ module Pulljoy
         " Please review whether it's safe to start a CI run for this pull request." \
         ' If you deem it safe, post the following comment:' \
         " `#{COMMAND_PREFIX} approve #{review_id}`")
+      save_state(
+        state: STATE_AWAITING_MANUAL_REVIEW,
+        review_id: review_id
+      )
+    end
+
+    # @param event [CheckSuiteEvent]
+    # @param pr [PullRequest]
+    def process_check_suite_completed_event_for_pr(event, pr)
+      log_debug("Processing for PR #{pr.number}")
+      set_context(
+        github_node_id: event.check_suite.node_id,
+        repo_full_name: event.repository.full_name,
+        pr_num: pr.number,
+      )
+
+      return if !load_state
+
+      if @state.state_name != STATE_WAITING_FOR_CI
+        log_debug("Ignoring PR because state is not #{STATE_WAITING_FOR_CI}",
+          state: @state.state_name)
+        return
+      end
+
+      if state.commit_sha != event.check_suite.commit_sha
+        log_debug('Ignoring PR because the commit for which the check suite was completed, is not the one we expect',
+          expected_commit: state.commit_sha,
+          actual_commit: event.check_suite.commit_sha)
+        return
+      end
+
+      check_suites = @octokit.
+        check_suites_for_ref(repo.full_name,
+          event.check_suite.head_sha).
+        check_suites
+      if !all_check_suites_completed?(check_suites)
+        log_debug('Ignoring PR because not all check suites for this commit are completed')
+        return
+      end
+
+      check_runs = @octokit.
+        check_runs_for_ref(repo.full_name,
+          event.check_suite.head_sha).
+        check_runs
+
+      overall_conclusion = get_overall_check_suites_conclusion(
+        check_suites)
+      short_sha = shorten_commit_sha(event.check_suite.head_sha)
+      delete_local_branch(event.repository)
+      post_comment("CI run for #{short_sha} completed.\n\n" \
+        " * Conclusion: #{overall_conclusion}\n" +
+        render_check_run_conclusions_markdown_list(check_runs))
     end
 
     # @param source_repo [PullRequestRepositoryReference]
@@ -275,16 +303,16 @@ module Pulljoy
     # @param commit_sha [String]
     def create_local_branch(source_repo, target_repo, commit_sha)
       Dir.mktempdir do |tmpdir|
+        script = <<~SCRIPT
+          set -ex
+          git clone "$SOURCE_REPO_CLONE_URL" repo
+          cd repo
+          git remote add target "$TARGET_REPO_PUSH_URL"
+          git reset --hard "$SOURCE_REPO_COMMIT_SHA"
+          git push -f target master:"$LOCAL_BRANCH_NAME"
+        SCRIPT
         result, output = execute_script(
-          <<~SCRIPT
-            set -ex
-            git clone "$SOURCE_REPO_CLONE_URL" repo
-            cd repo
-            git remote add target "$TARGET_REPO_PUSH_URL"
-            git reset --hard "$SOURCE_REPO_COMMIT_SHA"
-            git push -f target master:"$LOCAL_BRANCH_NAME"
-          SCRIPT
-          ,
+          script,
           env: git_auth_envvars.merge(
             SOURCE_REPO_CLONE_URL: infer_git_url(source_repo.full_name),
             SOURCE_REPO_COMMIT_SHA: commit_sha,
@@ -302,12 +330,12 @@ module Pulljoy
 
     # @param repo [Repository]
     def delete_local_branch(repo)
+      script = <<~SCRIPT
+        set -ex
+        git push "$REPO_PUSH_URL" ":$LOCAL_BRANCH_NAME"
+      SCRIPT
       result, output = execute_script(
-        <<~SCRIPT
-          set -ex
-          git push "$REPO_PUSH_URL" ":$LOCAL_BRANCH_NAME"
-        SCRIPT
-        ,
+        script,
         env: git_auth_envvars.merge(
           REPO_PUSH_URL: infer_git_https_url(repo.full_name),
           LOCAL_BRANCH_NAME: local_branch_name
@@ -319,17 +347,35 @@ module Pulljoy
       end
     end
 
-    # @param repo [Repository]
-    def cancel_ci_run(repo)
-      commit_sha = @octokit.branch(repo.full_name, local_branch_name).commit.sha
-      run_id = find_github_actions_run_id_for_ref(repo, commit_sha)
+    def cancel_ci_run
+      run_id = find_github_actions_run_id_for_ref(repo, @state.commit_sha)
 
       if run_id.nil?
-        log_debug("No Github Actions run ID found for commit #{commit_sha}")
+        log_debug('No Github Actions run ID detected',
+          commit: @state.commit_sha)
         return
       end
 
-      @octokit.cancel_workflow_run(repo.full_name, run_id)
+      log_debug('Cancelling Github Actions run',
+        run_id: run_id,
+        commit: @state.commit_sha)
+      @octokit.cancel_workflow_run(@context.repo_full_name, run_id)
+    end
+
+    # @param repo [Repository]
+    # @param commit_sha [String]
+    # @return [String, nil]
+    def find_github_actions_run_id_for_ref(repo, commit_sha)
+      runs1 = @octokit.repository_workflow_runs(repo.full_name, status: 'queued')
+      runs2 = @octokit.repository_workflow_runs(repo.full_name, status: 'in_progress')
+      [runs1, runs2].each do |runs|
+        runs.each do |run|
+          if run.head_sha == commit_sha
+            return run.id
+          end
+        end
+      end
+      nil
     end
 
     # @param check_runs [Array]
@@ -350,22 +396,6 @@ module Pulljoy
         result << " * [#{icon} #{check_run.app.name}: #{check_run.output.title}](#{check_run.html_url})\n"
       end
       result
-    end
-
-    # @param repo [Repository]
-    # @param commit_sha [String]
-    # @return [String, nil]
-    def find_github_actions_run_id_for_ref(repo, commit_sha)
-      runs1 = @octokit.repository_workflow_runs(repo.full_name, status: 'queued')
-      runs2 = @octokit.repository_workflow_runs(repo.full_name, status: 'in_progress')
-      [runs1, runs2].each do |runs|
-        runs.each do |run|
-          if run.head_sha == commit_sha
-            return run.id
-          end
-        end
-      end
-      nil
     end
 
 
@@ -396,14 +426,14 @@ module Pulljoy
           err: {
             name: e.class.to_s,
             message: e.to_s,
-            stack: e.backtrace,
+            stack: Pulljoy.format_error_and_backtrace(e),
           })
       end
     end
 
     # @param event [Dry::Struct]
     def log_event(event)
-      log_info('Handling event',
+      log_info('Processing event',
         event_class: event.class.to_s,
         event: event.to_hash)
     end
@@ -435,6 +465,7 @@ module Pulljoy
       end
     end
 
+    # @param props [Hash]
     def set_context(props)
       @context = Context.new(props)
     end
@@ -449,19 +480,22 @@ module Pulljoy
         repo: @context.repo_full_name,
         pr_num: @context.pr_num
       ).first
-    end
-
-    def reset_state(args = nil)
-      if args.nil?
-        raise NotImplementedError
+      if @state.nil?
+        log_debug('No state found')
+        false
       else
-        new_state = State.new(args)
-        raise NotImplementedError
+        log_debug('Loaded state', state: @state.to_hash)
+        true
       end
     end
 
-    def update_state(args)
-      new_state = State.new(@state.to_hash.merge(args))
+    # @param props [Hash]
+    def save_state(props)
+      new_state = State.new(props)
+      raise NotImplementedError
+    end
+
+    def reset_state
       raise NotImplementedError
     end
 
@@ -525,6 +559,30 @@ module Pulljoy
     def is_user_authorized?(repo, username)
       level = @octokit.permission_level(repo.full_name, username)
       level == 'admin' || level == 'write'
+    end
+
+    # @param commit_sha [String]
+    # @return [String]
+    def shorten_commit_sha(commit_sha)
+      commit_sha[0..7]
+    end
+
+    # @param check_suites [Array]
+    # @return [Boolean]
+    def all_check_suites_completed?(check_suites)
+      check_suites.all? do |check_suite|
+        check_suite.status == 'completed'
+      end
+    end
+
+    # @param check_suites [Array]
+    # @return [String]
+    def get_overall_check_suites_conclusion(check_suites)
+      if check_suites.all? { |s| s.conclusion == 'success' }
+        'success'
+      else
+        'failure'
+      end
     end
   end
 end
