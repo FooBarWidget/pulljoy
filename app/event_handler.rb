@@ -1,3 +1,4 @@
+# encoding: utf-8
 # frozen_string_literal: true
 
 require 'securerandom'
@@ -20,7 +21,7 @@ module Pulljoy
       attribute :github_node_id, Types::Strict::String
       attribute :repo_full_name, Types::Strict::String
       attribute :pr_num, Types::Strict::Integer
-      attribute :event_source_author, Types::Strict::String
+      attribute :event_source_author, Types::Strict::String.optional
       attribute :event_source_comment_id, Types::Strict::Integer.optional
     end
 
@@ -30,10 +31,15 @@ module Pulljoy
 
 
     # @param config [Config]
-    # @param reraise_unexpected_exceptions [Boolean]
-    def initialize(config:, reraise_unexpected_exceptions: true)
+    # @param octokit [Octokit::Client]
+    # @param my_username [String]
+    # @param log_unexpected_exceptions [Boolean]
+    def initialize(config:, octokit:, my_username:,
+        log_unexpected_exceptions: false)
       @config = config
-      @reraise_unexpected_exceptions = reraise_unexpected_exceptions
+      @octokit = octokit
+      @my_username = my_username
+      @log_unexpected_exceptions = log_unexpected_exceptions
     end
 
     # @param event [PullRequestEvent, IssueCommentEvent]
@@ -49,6 +55,7 @@ module Pulljoy
             pr_num: event.pull_request.number,
             event_source_author: event.user.login,
           )
+          log_event(event)
 
           case event.action
           when PullRequestEvent::ACTION_OPENED
@@ -69,10 +76,22 @@ module Pulljoy
             event_source_author: event.comment.user.login,
             event_source_comment_id: event.comment.id,
           )
+          log_event(event)
+
+          # TODO: filter out only PR comments
+          # TODO: check whether we already knew about this PR
 
           case event.action
           when IssueCommentEvent::ACTION_CREATED
             process_issue_comment_created_event(event)
+          end
+
+        when CheckSuiteEvent
+          log_event(event)
+
+          case event.action
+          when CheckSuiteEvent::ACTION_COMPLETED
+            process_check_suite_completed_event(event)
           end
 
         else
@@ -80,8 +99,8 @@ module Pulljoy
         end
 
       rescue => e
-        log_unexpected_error(e)
-        raise e if @reraise_unexpected_exceptions
+        handle_unexpected_error(e)
+        raise e
       end
 
       if !processed
@@ -158,7 +177,8 @@ module Pulljoy
       end
 
       if !is_user_authorized?(@context.event_source_author)
-        log_debug("Ignoring comment: user #{@context.event_source_author} not authorized to send commands")
+        log_debug('Ignoring comment: user not authorized to send commands',
+          username: @context.event_source_author)
         return
       end
 
@@ -194,6 +214,50 @@ module Pulljoy
         post_comment("Sorry @#{@context.event_source_author}, that was the wrong review ID." \
           " Please check whether you posted the right ID, or whether the pull request needs to" \
           " be re-reviewed.")
+      end
+    end
+
+    # @param event [CheckSuiteEvent]
+    def process_check_suite_completed_event(event)
+      if event.check_suite.pull_requests.empty?
+        log_debug('No pull requests found in this event')
+        return
+      end
+
+      event.check_suite.pull_requests do |pr|
+        set_context(
+          github_node_id: event.check_suite.node_id,
+          repo_full_name: event.repository.full_name,
+          pr_num: pr.number,
+        )
+
+        load_state
+        if @state.state_name != STATE_WAITING_FOR_CI
+          log_debug("Ignoring PR because state is not #{STATE_WAITING_FOR_CI}",
+            state: @state.state_name)
+          next
+        end
+
+        if state.commit_sha != event.check_suite.commit_sha
+          log_info('Ignoring PR because the commit for which the check suite was completed, is not the one we expect',
+            expected_commit: state.commit_sha,
+            actual_commit: event.check_suite.commit_sha)
+          return
+        end
+
+        if !all_check_suites_completed?(event.check_suite_commit_sha)
+          log_info('Ignoring PR because not all check suites are completed')
+          return
+        end
+
+        log_debug('Processing PR')
+        short_sha = shorten_commit_sha(event.check_suite.head_sha)
+        overall_conclusion = get_overall_check_suites_conclusion(event.check_suite.head_sha)
+        check_runs = @octokit.check_runs_for_ref(repo.full_name, short_sha)
+        delete_local_branch
+        post_comment("CI run for #{short_sha} completed.\n\n" \
+          " * Conclusion: #{overall_conclusion}\n" +
+          render_check_run_conclusions_markdown_list(check_runs))
       end
     end
 
@@ -268,6 +332,26 @@ module Pulljoy
       @octokit.cancel_workflow_run(repo.full_name, run_id)
     end
 
+    # @param check_runs [Array]
+    # @return [String]
+    def render_check_run_conclusions_markdown_list(check_runs)
+      result = String.new
+      check_runs.each do |check_run|
+        case check_run.conclusion
+        when 'success'
+          icon = '✅'
+        when 'failure', 'cancelled', 'timed_out', 'stale'
+          icon = '❌'
+        when 'action_required'
+          icon = '⚠️'
+        else
+          icon = '❔'
+        end
+        result << " * [#{icon} #{check_run.app.name}: #{check_run.output.title}](#{check_run.html_url})\n"
+      end
+      result
+    end
+
     # @param repo [Repository]
     # @param commit_sha [String]
     # @return [String, nil]
@@ -286,30 +370,42 @@ module Pulljoy
 
 
     # @param e [StandardError]
-    def log_unexpected_error(e)
+    def handle_unexpected_error(e)
       if @context
+        if @context.event_source_author
+          referee = "@#{@context.event_source_author}"
+        end
         if e.is_a?(BugError)
-          post_comment("@#{@context.event_source_author}" \
-            " Oops, bug found in Pulljoy the CI bot:\n" \
+          post_comment(
+            "#{referee}Oops, bug found in Pulljoy the CI bot:\n" \
             "~~~\n" \
             "#{e.message}\n" \
             "~~~\n" \
             "Please report this bug to the Pulljoy developers.")
         else
-          post_comment("@#{@context.event_source_author}" \
-            " Oops, Pulljoy the CI bot has encountered an unexpected error:\n" \
+          post_comment(
+            "#{referee}Oops, Pulljoy the CI bot has encountered an unexpected error:\n" \
             "~~~\n" \
             "#{e.class}:\n#{e.message}\n" \
             "~~~\n")
         end
       end
 
-      log_error('Encountered unexpected error',
-        err: {
-          name: e.class.to_s,
-          message: e.to_s,
-          stack: e.backtrace,
-        })
+      if @log_unexpected_exceptions
+        log_error('Encountered unexpected error',
+          err: {
+            name: e.class.to_s,
+            message: e.to_s,
+            stack: e.backtrace,
+          })
+      end
+    end
+
+    # @param event [Dry::Struct]
+    def log_event(event)
+      log_info('Handling event',
+        event_class: event.class.to_s,
+        event: event.to_hash)
     end
 
     def log_error(message, props = {})
@@ -339,8 +435,8 @@ module Pulljoy
       end
     end
 
-    def set_context(*args)
-      @context = Context.new(*args)
+    def set_context(props)
+      @context = Context.new(props)
     end
 
     # @return [String]
@@ -349,7 +445,10 @@ module Pulljoy
     end
 
     def load_state
-      raise NotImplementedError
+      @state = State.where(
+        repo: @context.repo_full_name,
+        pr_num: @context.pr_num
+      ).first
     end
 
     def reset_state(args = nil)
@@ -397,6 +496,9 @@ module Pulljoy
       "pulljoy/#{@context.pr_num}"
     end
 
+    # @param script [String]
+    # @param env [Hash<Symbol, String>]
+    # @param chdir [String, nil]
     def execute_script(script, env:, chdir: nil)
       opts = {
         in: ['/dev/null', 'r'],
@@ -409,6 +511,20 @@ module Pulljoy
         io.read
       end
       [$?.success?, output]
+    end
+
+    # @param username [String]
+    # @return [Boolean]
+    def is_myself?(username)
+      username == @my_username
+    end
+
+    # @param repo [Repository]
+    # @param username [String]
+    # @return [Boolean]
+    def is_user_authorized?(repo, username)
+      level = @octokit.permission_level(repo.full_name, username)
+      level == 'admin' || level == 'write'
     end
   end
 end

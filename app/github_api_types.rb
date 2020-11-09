@@ -40,10 +40,8 @@ module Pulljoy
   class IssueCommentEvent < Dry::Struct
     # Possible values for 'action'
     ACTION_CREATED = 'created'
-    ACTION_EDITED = 'edited'
-    ACTION_DELETED = 'deleted'
 
-    attribute :action, Types::Strict::String.enum
+    attribute :action, Types::Strict::String
     attribute :repository, Repository
     attribute :issue do
       attribute :node_id, Types::Strict::String
@@ -53,6 +51,19 @@ module Pulljoy
       attribute :id, Types::Strict::Integer
       attribute :body, Types::Strict::String
       attribute :user, User
+    end
+  end
+
+  class CheckSuiteEvent < Dry::Struct
+    ACTION_COMPLETED = 'completed'
+
+    attribute :action, Types::Strict::String
+    attribute :repository, Repository
+    attribute :check_suite do
+      attribute :node_id, Types::Strict::String
+      attribute :head_sha, Types::Strict::String
+      attribute :conclusion, Types::Strict::String
+      attribute :pull_requests, Types::Array.of(PullRequest)
     end
   end
 end
