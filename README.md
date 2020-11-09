@@ -1,5 +1,9 @@
 # Pulljoy: make external pull requests CI-able again
 
+Pulljoy is a CI bot that helps you run CI sessions on external pull requests, in a safe and easy manner.
+
+## Why Pulljoy?
+
 You use Github Actions for CI. Your CI relies on secrets. When you receive a pull request from a fork, you discover that the CI for that pull request fails, because pull request workflow runs don't have access to your secrets.
 
 You search the Internet and discover that there's a setting to allow pull request workflow runs to access your secrets. But you stop -- _should_ you do this? What if someone submits a malicious pull request which steals your secret? You close the tab.
