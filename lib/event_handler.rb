@@ -1,6 +1,6 @@
-# encoding: utf-8
 # frozen_string_literal: true
 
+require 'english'
 require 'securerandom'
 require 'dry-struct'
 require_relative 'types'
@@ -24,92 +24,73 @@ module Pulljoy
       attribute? :event_source_comment_id, Types::Strict::Integer.optional
     end
 
-    class State < Dry::Struct
-      attribute :state_name, Types::Strict::String
-      attribute? :review_id, Types::Strict::String.optional
-      attribute? :commit_sha, Types::Strict::String.optional
-    end
+    class State < ActiveRecord::Base; end
 
 
     # @param config [Config]
     # @param octokit [Octokit::Client]
     # @param my_username [String]
-    # @param log_unexpected_exceptions [Boolean]
-    def initialize(config:, octokit:, logger:, my_username:,
-        log_unexpected_exceptions: false)
+    def initialize(config:, octokit:, logger:, my_username:)
       @config = config
       @octokit = octokit
       @logger = logger
       @my_username = my_username
-      @log_unexpected_exceptions = log_unexpected_exceptions
     end
 
     # @param event [PullRequestEvent, IssueCommentEvent]
     def process(event)
-      processed = true
+      case event
+      when PullRequestEvent
+        set_context(
+          github_node_id: event.pull_request.node_id,
+          repo_full_name: event.repository.full_name,
+          pr_num: event.pull_request.number,
+          event_source_author: event.user.login,
+        )
+        log_event(event)
 
-      begin
-        case event
-        when PullRequestEvent
-          set_context(
-            github_node_id: event.pull_request.node_id,
-            repo_full_name: event.repository.full_name,
-            pr_num: event.pull_request.number,
-            event_source_author: event.user.login,
-          )
-          log_event(event)
-
-          case event.action
-          when PullRequestEvent::ACTION_OPENED
-            process_pull_request_opened_event(event)
-          when PullRequestEvent::ACTION_REOPENED
-            process_pull_request_reopened_event(event)
-          when PullRequestEvent::ACTION_SYNCHRONIZE
-            process_pull_request_synchronize_event(event)
-          when PullRequestEvent::ACTION_CLOSED
-            process_pull_request_closed_event(event)
-          else
-            log_debug("Ignoring '#{event.action}' action")
-          end
-
-        when IssueCommentEvent
-          set_context(
-            github_node_id: event.issue.node_id,
-            repo_full_name: event.repository.full_name,
-            pr_num: event.issue.number,
-            event_source_author: event.comment.user.login,
-            event_source_comment_id: event.comment.id,
-          )
-          log_event(event)
-
-          case event.action
-          when IssueCommentEvent::ACTION_CREATED
-            process_issue_comment_created_event(event)
-          else
-            log_debug("Ignoring '#{event.action}' action")
-          end
-
-        when CheckSuiteEvent
-          log_event(event)
-
-          case event.action
-          when CheckSuiteEvent::ACTION_COMPLETED
-            process_check_suite_completed_event(event)
-          else
-            log_debug("Ignoring '#{event.action}' action")
-          end
-
+        case event.action
+        when PullRequestEvent::ACTION_OPENED
+          process_pull_request_opened_event(event)
+        when PullRequestEvent::ACTION_REOPENED
+          process_pull_request_reopened_event(event)
+        when PullRequestEvent::ACTION_SYNCHRONIZE
+          process_pull_request_synchronize_event(event)
+        when PullRequestEvent::ACTION_CLOSED
+          process_pull_request_closed_event(event)
         else
-          processed = false
+          log_debug("Ignoring '#{event.action}' action")
         end
 
-      rescue => e
-        handle_unexpected_error(e)
-        raise e
-      end
+      when IssueCommentEvent
+        set_context(
+          github_node_id: event.issue.node_id,
+          repo_full_name: event.repository.full_name,
+          pr_num: event.issue.number,
+          event_source_author: event.comment.user.login,
+          event_source_comment_id: event.comment.id,
+        )
+        log_event(event)
 
-      if !processed
-        raise ArgumentError, "unsupported event type #{event.class}"
+        case event.action
+        when IssueCommentEvent::ACTION_CREATED
+          process_issue_comment_created_event(event)
+        else
+          log_debug("Ignoring '#{event.action}' action")
+        end
+
+      when CheckSuiteEvent
+        log_event(event)
+
+        case event.action
+        when CheckSuiteEvent::ACTION_COMPLETED
+          process_check_suite_completed_event(event)
+        else
+          log_debug("Ignoring '#{event.action}' action")
+        end
+
+      else
+        raise ArgumentError, "Unsupported event type #{event.class}"
       end
     end
 
@@ -117,15 +98,13 @@ module Pulljoy
     # @param event [PullRequestEvent]
     def process_pull_request_opened_event(event)
       log_debug("Processing 'open' action")
-      review_id = generate_review_id
-      request_manual_review(review_id)
+      request_manual_review(generate_review_id)
     end
 
     # @param event [PullRequestEvent]
     def process_pull_request_reopened_event(event)
       log_debug("Processing 'reopen' action")
-      review_id = generate_review_id
-      request_manual_review(review_id)
+      request_manual_review(generate_review_id)
     end
 
     # @param event [PullRequestEvent]
@@ -170,11 +149,11 @@ module Pulljoy
       log_debug("Processing 'created' action")
       return if !load_state
 
-      if is_myself?(@context.event_source_author)
+      if user_is_myself?(@context.event_source_author)
         log_debug('Ignoring comment by myself')
         return
       end
-      if !is_user_authorized?(@context.event_source_author)
+      if !user_authorized?(@context.event_source_author)
         log_debug('Ignoring comment: user not authorized to send commands',
           username: @context.event_source_author)
         return
@@ -298,6 +277,8 @@ module Pulljoy
         render_check_run_conclusions_markdown_list(check_runs))
     end
 
+    # rubocop:disable Metrics/MethodLength
+
     # @param source_repo [PullRequestRepositoryReference]
     # @param target_repo [PullRequestRepositoryReference]
     # @param commit_sha [String]
@@ -347,18 +328,24 @@ module Pulljoy
       end
     end
 
+    # rubocop:enable Metrics/MethodLength
+
     def cancel_ci_run
       run_id = find_github_actions_run_id_for_ref(repo, @state.commit_sha)
 
       if run_id.nil?
-        log_debug('No Github Actions run ID detected',
-          commit: @state.commit_sha)
+        log_debug(
+          'No Github Actions run ID detected',
+          commit: @state.commit_sha
+        )
         return
       end
 
-      log_debug('Cancelling Github Actions run',
+      log_debug(
+        'Cancelling Github Actions run',
         run_id: run_id,
-        commit: @state.commit_sha)
+        commit: @state.commit_sha
+      )
       @octokit.cancel_workflow_run(@context.repo_full_name, run_id)
     end
 
@@ -370,9 +357,7 @@ module Pulljoy
       runs2 = @octokit.repository_workflow_runs(repo.full_name, status: 'in_progress')
       [runs1, runs2].each do |runs|
         runs.each do |run|
-          if run.head_sha == commit_sha
-            return run.id
-          end
+          return run.id if run.head_sha == commit_sha
         end
       end
       nil
@@ -399,43 +384,13 @@ module Pulljoy
     end
 
 
-    # @param e [StandardError]
-    def handle_unexpected_error(e)
-      if @context
-        if @context.event_source_author
-          referee = "@#{@context.event_source_author}"
-        end
-        if e.is_a?(BugError)
-          post_comment(
-            "#{referee}Oops, bug found in Pulljoy the CI bot:\n" \
-            "~~~\n" \
-            "#{e.message}\n" \
-            "~~~\n" \
-            "Please report this bug to the Pulljoy developers.")
-        else
-          post_comment(
-            "#{referee}Oops, Pulljoy the CI bot has encountered an unexpected error:\n" \
-            "~~~\n" \
-            "#{e.class}:\n#{e.message}\n" \
-            "~~~\n")
-        end
-      end
-
-      if @log_unexpected_exceptions
-        log_error('Encountered unexpected error',
-          err: {
-            name: e.class.to_s,
-            message: e.to_s,
-            stack: Pulljoy.format_error_and_backtrace(e),
-          })
-      end
-    end
-
     # @param event [Dry::Struct]
     def log_event(event)
-      log_info('Processing event',
+      log_info(
+        'Processing event',
         event_class: event.class.to_s,
-        event: event.to_hash)
+        event: event.to_hash,
+      )
     end
 
     def log_error(message, props = {})
@@ -456,9 +411,7 @@ module Pulljoy
           repo: @context.repo_full_name,
           pr_num: @context.pr_num,
         }
-        if @context.event_source_comment_id
-          result[comment_id] = @context.event_source_comment_id
-        end
+        result[:comment_id] = @context.event_source_comment_id if @context.event_source_comment_id
         result
       else
         {}
@@ -466,7 +419,7 @@ module Pulljoy
     end
 
     # @param props [Hash]
-    def set_context(props)
+    def set_context(props) # rubocop:disable Naming/AccessorMethodName
       @context = Context.new(props)
     end
 
@@ -544,21 +497,29 @@ module Pulljoy
       output = IO.popen(env, script, 'r:utf-8', opts) do |io|
         io.read
       end
-      [$?.success?, output]
+      [$CHILD_STATUS.success?, output]
+    end
+
+    def post_comment(message)
+      @octokit.add_comment(
+        @context.repo_full_name,
+        @context.pr_num,
+        message
+      )
     end
 
     # @param username [String]
     # @return [Boolean]
-    def is_myself?(username)
+    def user_is_myself?(username)
       username == @my_username
     end
 
     # @param repo [Repository]
     # @param username [String]
     # @return [Boolean]
-    def is_user_authorized?(repo, username)
+    def user_authorized?(repo, username)
       level = @octokit.permission_level(repo.full_name, username)
-      level == 'admin' || level == 'write'
+      %w(admin write).include?(level)
     end
 
     # @param commit_sha [String]

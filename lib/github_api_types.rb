@@ -5,19 +5,27 @@ require_relative 'types'
 
 module Pulljoy
   class Repository < Dry::Struct
+    transform_keys(&:to_sym)
+
     attribute :full_name, Types::Strict::String
   end
 
   class User < Dry::Struct
+    transform_keys(&:to_sym)
+
     attribute :login, Types::Strict::String
   end
 
   class PullRequestRepositoryReference < Dry::Struct
+    transform_keys(&:to_sym)
+
     attribute :sha, Types::Strict::String
     attribute :repo, Repository
   end
 
   class PullRequest < Dry::Struct
+    transform_keys(&:to_sym)
+
     attribute :node_id, Types::Strict::String
     attribute :number, Types::Strict::Integer
     attribute :head, PullRequestRepositoryReference

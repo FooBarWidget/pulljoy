@@ -3,20 +3,28 @@
 require 'yaml'
 require 'octokit'
 require 'ougai'
+require 'active_record'
 require_relative 'config'
+require_relative 'active_record_json_log_subscriber'
 
 module Pulljoy
   module Boot
     class << self
-      def infer_config_source(cli_path_option = nil)
-        if cli_path_option
-          [:path, cli_path_option]
-        elsif path = read_env_str('PULLJOY_CONFIG_PATH')
+      def infer_config_source
+        if (path = read_env_str('PULLJOY_CONFIG_PATH'))
           [:path, path]
-        elsif data = read_env_str('PULLJOY_CONFIG')
+        elsif (data = read_env_str('PULLJOY_CONFIG'))
           [:data, data]
+        end
+      end
+
+      def infer_config_source!
+        config_source = infer_config_source
+        if config_source.nil?
+          $stderr.puts 'Please specify a config file, for example with PULLJOY_CONFIG_PATH.'
+          abort
         else
-          nil
+          config_source
         end
       end
 
@@ -39,6 +47,18 @@ module Pulljoy
         Config.new(doc)
       end
 
+      def load_config!(config_source)
+        begin
+          load_config(config_source)
+        rescue Psych::SyntaxError => e
+          $stderr.puts "Syntax error in config file: #{e}"
+          abort
+        rescue Dry::Struct::Error => e
+          $stderr.puts "Config file validation error: #{e}"
+          abort
+        end
+      end
+
       # @param config [Config]
       # @return [Octokit::Client]
       def create_octokit(config)
@@ -48,7 +68,7 @@ module Pulljoy
       # @param config [Config]
       # @return [Ougai::Logger]
       def create_logger(config)
-        logger = Ougai::Logger.new(STDOUT, progname: 'pulljoy')
+        logger = Ougai::Logger.new($stdout, progname: 'pulljoy')
         logger.level = log_level_for_str(config.log_level)
         if config.log_format == 'human'
           require 'amazing_print'
@@ -63,7 +83,20 @@ module Pulljoy
         octokit.user.login
       end
 
-    private
+      # @param config [Config]
+      def establish_db_connection(config, logger)
+        ActiveRecord::Base.establish_connection(config.database.to_hash)
+        case config.log_format
+        when 'human'
+          ActiveRecord::Base.logger = logger
+        when 'json'
+          log_subscriber = ActiveRecordJSONLogSubscriber.new(logger)
+          ActiveRecordJSONLogSubscriber.attach_to(:active_record, log_subscriber)
+        end
+      end
+
+      private
+
       def read_env_str(name)
         value = ENV[name].to_s
         if value.empty?

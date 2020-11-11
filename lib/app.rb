@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'json'
+require 'active_record'
 require 'sinatra'
 require 'sinatra/json'
 require 'sinatra/github_webhooks'
@@ -42,7 +43,8 @@ module Pulljoy
       @logger = @logger_template.child(
         request_id: SecureRandom.hex(8),
       )
-      @logger.info('Request started',
+      @logger.info(
+        'Request started',
         method: request.request_method,
         path: request.path,
         ip: request.ip,
@@ -50,8 +52,11 @@ module Pulljoy
     end
 
     after do
-      @logger.info('Request complete',
-        status: response.status)
+      @logger.info(
+        'Request complete',
+        status: response.status
+      )
+      ActiveRecord::Base.clear_active_connections!
     end
 
     error do
@@ -69,7 +74,13 @@ module Pulljoy
       "Internal server error\n"
     end
 
+    get '/ping' do
+      'pong'
+    end
+
     post '/process' do
+      @logger.info("Github event type: #{github_event}")
+
       case github_event
       when 'pull_request'
         event = PullRequestEvent(payload)
@@ -77,12 +88,16 @@ module Pulljoy
         event = IssueCommentEvent.new(payload)
       when 'check_suite'
         event = CheckSuiteEvent.new(payload)
+      when 'ping'
+        return json(processed: true)
       end
 
       if event
         create_event_handler.process(event)
         json(processed: true)
       else
+        @logger.error "Unsupported event type #{github_event.inspect}"
+        status 422
         json(
           processed: false,
           message: "Unsupported event type #{github_event.inspect}",
@@ -90,7 +105,8 @@ module Pulljoy
       end
     end
 
-  private
+    private
+
     def read_option(options, key)
       options[key] || raise(ArgumentError, "Option #{key.inspect} required")
     end

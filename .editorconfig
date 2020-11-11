@@ -21,6 +21,10 @@ indent_size = 2
 indent_style = space
 indent_size = 2
 
-[bin/pulljoy]
+[Rakefile]
+indent_style = space
+indent_size = 2
+
+[bin/console]
 indent_style = space
 indent_size = 2

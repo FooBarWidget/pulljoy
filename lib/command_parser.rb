@@ -5,7 +5,7 @@ require_relative 'types'
 
 module Pulljoy
   COMMAND_PREFIX = '/pulljoy'
-  COMMAND_PREFIX_RE = %r{^#{Regexp.escape(COMMAND_PREFIX)} }
+  COMMAND_PREFIX_RE = /^#{Regexp.escape(COMMAND_PREFIX)} /.freeze
 
   class UnsupportedCommandType < StandardError; end
   class CommandSyntaxError < StandardError; end
@@ -23,11 +23,10 @@ module Pulljoy
     command_type, *args = text.split
 
     begin
-    case command_type
+      case command_type
       when 'approve'
-        if args.size != 1
-          raise CommandSyntaxError, "'approve' command requires exactly 1 argument"
-        end
+        raise CommandSyntaxError, "'approve' command requires exactly 1 argument" if args.size != 1
+
         ApproveCommand.new(review_id: args[0])
       else
         raise UnsupportedCommandType, "Unsupported command type #{args[0].inspect}"

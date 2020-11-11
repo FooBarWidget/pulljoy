@@ -2,6 +2,7 @@
 
 require 'json'
 require 'time'
+require 'english'
 
 module Pulljoy
   class PumaJSONFormatter
@@ -10,15 +11,15 @@ module Pulljoy
     end
 
     def call(msg)
-      JSON.generate({
+      JSON.generate(
         name: 'pulljoy',
         hostname: @hostname,
-        pid: $$,
+        pid: $PROCESS_ID,
         level: 30,
         time: Time.now.iso8601(3),
         v: 0,
         msg: msg,
-      })
+      )
     end
   end
 end

@@ -1,0 +1,17 @@
+#!/usr/bin/env ruby
+require 'bundler/setup'
+require 'pry'
+require 'byebug'
+require_relative '../lib/boot'
+require_relative '../lib/event_handler'
+
+module Pulljoy
+  config_source = Boot.infer_config_source!
+  config = Boot.load_config!(config_source)
+  logger = Boot.create_logger(config)
+  Boot.establish_db_connection(config, logger)
+end
+
+module Pulljoy
+  pry
+end

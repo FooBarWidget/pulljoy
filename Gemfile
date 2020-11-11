@@ -1,17 +1,23 @@
+# frozen_string_literal: true
+
 source 'https://rubygems.org'
 
+gem 'activerecord'
+gem 'amazing_print'
 gem 'dry-struct'
 gem 'octokit'
+gem 'ougai'
+gem 'puma'
+gem 'pg'
+gem 'rake'
 gem 'sinatra'
 gem 'sinatra-contrib'
 gem 'sinatra-github_webhooks'
-gem 'ougai'
-gem 'amazing_print'
-gem 'puma'
 
 group :development, :test do
-  gem 'pry'
   gem 'byebug'
+  gem 'pry'
+  gem 'rubocop'
 end
 
 group :test do
