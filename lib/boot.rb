@@ -1,11 +1,6 @@
 # frozen_string_literal: true
 
-require 'yaml'
-require 'octokit'
-require 'ougai'
-require 'active_record'
 require_relative 'config'
-require_relative 'active_record_json_log_subscriber'
 
 module Pulljoy
   module Boot
@@ -32,6 +27,8 @@ module Pulljoy
       # @raises [Psych::SyntaxError] Configuration syntax error
       # @raises [Dry::Struct::Error] Configuration validation error
       def load_config(config_source)
+        require 'yaml'
+
         type, path_or_data = config_source
         case type
         when :path
@@ -48,28 +45,30 @@ module Pulljoy
       end
 
       def load_config!(config_source)
-        begin
-          load_config(config_source)
-        rescue Psych::SyntaxError => e
-          $stderr.puts "Syntax error in config file: #{e}"
-          abort
-        rescue Dry::Struct::Error => e
-          $stderr.puts "Config file validation error: #{e}"
-          abort
-        end
+        load_config(config_source)
+      rescue Psych::SyntaxError => e
+        $stderr.puts "Syntax error in config file: #{e}"
+        abort
+      rescue Dry::Struct::Error => e
+        $stderr.puts "Config file validation error: #{e}"
+        abort
       end
 
       # @param config [Config]
       # @return [Octokit::Client]
       def create_octokit(config)
+        require 'octokit'
+
         Octokit::Client.new(access_token: config.github_access_token)
       end
 
       # @param config [Config]
       # @return [Ougai::Logger]
       def create_logger(config)
+        require 'ougai'
+
         logger = Ougai::Logger.new($stdout, progname: 'pulljoy')
-        logger.level = log_level_for_str(config.log_level)
+        logger.level = config.log_level
         if config.log_format == 'human'
           require 'amazing_print'
           logger.formatter = Ougai::Formatters::Readable.new
@@ -85,13 +84,23 @@ module Pulljoy
 
       # @param config [Config]
       def establish_db_connection(config, logger)
-        ActiveRecord::Base.establish_connection(config.database.to_hash)
+        require 'active_record'
+        require 'composite_primary_keys'
+
+        db_config = config.database
+        ActiveRecord::Base.configurations = { 'default' => db_config }
+        ActiveRecord::Base.establish_connection(db_config)
+        ActiveRecord::Tasks::DatabaseTasks.database_configuration = db_config
+        ActiveRecord::Tasks::DatabaseTasks.db_dir = 'db'
+
         case config.log_format
         when 'human'
           ActiveRecord::Base.logger = logger
         when 'json'
-          log_subscriber = ActiveRecordJSONLogSubscriber.new(logger)
-          ActiveRecordJSONLogSubscriber.attach_to(:active_record, log_subscriber)
+          require_relative 'json_logging/active_record_log_subscriber'
+
+          log_subscriber = JSONLogging::ActiveRecordLogSubscriber.new(logger)
+          JSONLogging::ActiveRecordLogSubscriber.attach_to(:active_record, log_subscriber)
         end
       end
 
@@ -103,23 +112,6 @@ module Pulljoy
           nil
         else
           value
-        end
-      end
-
-      def log_level_for_str(level)
-        case level
-        when 'fatal'
-          Logger::FATAL
-        when 'error'
-          Logger::ERROR
-        when 'warn'
-          Logger::WARN
-        when 'info'
-          Logger::INFO
-        when 'debug'
-          Logger::DEBUG
-        else
-          Logger::UNKNOWN
         end
       end
     end

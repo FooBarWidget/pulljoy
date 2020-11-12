@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative 'spec_helper'
-require_relative '../app/command_parser'
+require_relative '../lib/command_parser'
 
 describe 'Pulljoy.parse_command' do
   def parse_command(text)

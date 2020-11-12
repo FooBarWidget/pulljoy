@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'dry-struct'
-require_relative 'types'
+require_relative 'utils'
 
 module Pulljoy
   class Config < Dry::Struct

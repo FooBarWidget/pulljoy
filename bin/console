@@ -1,4 +1,6 @@
 #!/usr/bin/env ruby
+# frozen_string_literal: true
+
 require 'bundler/setup'
 require 'pry'
 require 'byebug'
@@ -7,11 +9,8 @@ require_relative '../lib/event_handler'
 
 module Pulljoy
   config_source = Boot.infer_config_source!
-  config = Boot.load_config!(config_source)
-  logger = Boot.create_logger(config)
-  Boot.establish_db_connection(config, logger)
-end
-
-module Pulljoy
-  pry
+  CONFIG = Boot.load_config!(config_source)
+  LOGGER = Boot.create_logger(CONFIG)
+  Boot.establish_db_connection(CONFIG, LOGGER)
+  pry # rubocop:disable Lint/Debugger
 end

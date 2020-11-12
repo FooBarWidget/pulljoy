@@ -9,7 +9,7 @@ require_relative 'event_handler'
 require_relative 'github_api_types'
 
 module Pulljoy
-  class App < Sinatra::Base
+  class WebApp < Sinatra::Base
     def self.activate_pulljoy_config(config)
       set :pulljoy_config, config
       set :github_webhook_secret, config.github_webhook_secret

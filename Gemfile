@@ -2,13 +2,16 @@
 
 source 'https://rubygems.org'
 
+ruby '>= 2.4'
+
 gem 'activerecord'
 gem 'amazing_print'
+gem 'composite_primary_keys'
 gem 'dry-struct'
 gem 'octokit'
 gem 'ougai'
-gem 'puma'
 gem 'pg'
+gem 'puma'
 gem 'rake'
 gem 'sinatra'
 gem 'sinatra-contrib'
@@ -21,7 +24,7 @@ group :development, :test do
 end
 
 group :test do
-  gem 'rspec-core'
-  gem 'rspec-expectations'
+  gem 'database_cleaner-active_record'
+  gem 'rspec'
   gem 'webmock'
 end

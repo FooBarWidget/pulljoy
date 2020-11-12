@@ -1,0 +1,8 @@
+# test-database-config.yml dictates which database the unit tests
+# use. It's in the Rails Active Record configuration format.
+adapter: postgresql
+hostname: localhost
+database: pulljoy_test
+username: pulljoy
+password: something
+encoding: utf-8

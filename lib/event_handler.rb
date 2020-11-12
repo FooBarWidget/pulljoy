@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
-require 'english'
 require 'securerandom'
 require 'dry-struct'
-require_relative 'types'
+require 'active_record'
+require 'composite_primary_keys'
 require_relative 'github_api_types'
 require_relative 'command_parser'
 require_relative 'utils'
@@ -13,18 +13,19 @@ module Pulljoy
     SELFDIR = File.absolute_path(File.dirname(__FILE__))
 
     STATE_AWAITING_MANUAL_REVIEW = 'awaiting_manual_review'
-    STATE_WAITING_FOR_CI = 'waiting_for_ci'
+    STATE_AWAITING_CI = 'awaiting_ci'
     STATE_STANDING_BY = 'standing_by'
 
     class Context < Dry::Struct
-      attribute :github_node_id, Types::Strict::String
       attribute :repo_full_name, Types::Strict::String
       attribute :pr_num, Types::Strict::Integer
       attribute? :event_source_author, Types::Strict::String.optional
       attribute? :event_source_comment_id, Types::Strict::Integer.optional
     end
 
-    class State < ActiveRecord::Base; end
+    class State < ActiveRecord::Base
+      self.primary_keys = [:repo, :pr_num]
+    end
 
 
     # @param config [Config]
@@ -42,7 +43,6 @@ module Pulljoy
       case event
       when PullRequestEvent
         set_context(
-          github_node_id: event.pull_request.node_id,
           repo_full_name: event.repository.full_name,
           pr_num: event.pull_request.number,
           event_source_author: event.user.login,
@@ -64,7 +64,6 @@ module Pulljoy
 
       when IssueCommentEvent
         set_context(
-          github_node_id: event.issue.node_id,
           repo_full_name: event.repository.full_name,
           pr_num: event.issue.number,
           event_source_author: event.comment.user.login,
@@ -117,9 +116,9 @@ module Pulljoy
         review_id = generate_review_id
         request_manual_review(review_id)
 
-      when STATE_WAITING_FOR_CI
+      when STATE_AWAITING_CI
         cancel_ci_run
-        delete_local_branch(event.repository)
+        delete_local_branch(event.repository.full_name)
         review_id = generate_review_id
         request_manual_review(review_id)
 
@@ -137,9 +136,9 @@ module Pulljoy
       log_debug("Processing 'closed' action")
       return if !load_state
 
-      if state.state_name == STATE_WAITING_FOR_CI
+      if @state.state_name == STATE_AWAITING_CI
         cancel_ci_run
-        delete_local_branch(event.repository)
+        delete_local_branch(event.repository.full_name)
       end
       reset_state
     end
@@ -224,7 +223,7 @@ module Pulljoy
         ' If you deem it safe, post the following comment:' \
         " `#{COMMAND_PREFIX} approve #{review_id}`")
       save_state(
-        state: STATE_AWAITING_MANUAL_REVIEW,
+        state_name: STATE_AWAITING_MANUAL_REVIEW,
         review_id: review_id
       )
     end
@@ -234,15 +233,14 @@ module Pulljoy
     def process_check_suite_completed_event_for_pr(event, pr)
       log_debug("Processing for PR #{pr.number}")
       set_context(
-        github_node_id: event.check_suite.node_id,
         repo_full_name: event.repository.full_name,
         pr_num: pr.number,
       )
 
       return if !load_state
 
-      if @state.state_name != STATE_WAITING_FOR_CI
-        log_debug("Ignoring PR because state is not #{STATE_WAITING_FOR_CI}",
+      if @state.state_name != STATE_AWAITING_CI
+        log_debug("Ignoring PR because state is not #{STATE_AWAITING_CI}",
           state: @state.state_name)
         return
       end
@@ -270,8 +268,8 @@ module Pulljoy
 
       overall_conclusion = get_overall_check_suites_conclusion(
         check_suites)
-      short_sha = shorten_commit_sha(event.check_suite.head_sha)
-      delete_local_branch(event.repository)
+      short_sha = Pulljoy.shorten_commit_sha(event.check_suite.head_sha)
+      delete_local_branch(event.repository.full_name)
       post_comment("CI run for #{short_sha} completed.\n\n" \
         " * Conclusion: #{overall_conclusion}\n" +
         render_check_run_conclusions_markdown_list(check_runs))
@@ -292,7 +290,7 @@ module Pulljoy
           git reset --hard "$SOURCE_REPO_COMMIT_SHA"
           git push -f target master:"$LOCAL_BRANCH_NAME"
         SCRIPT
-        result, output = execute_script(
+        result, output = Pulljoy.execute_script(
           script,
           env: git_auth_envvars.merge(
             SOURCE_REPO_CLONE_URL: infer_git_url(source_repo.full_name),
@@ -309,29 +307,25 @@ module Pulljoy
       end
     end
 
-    # @param repo [Repository]
-    def delete_local_branch(repo)
-      script = <<~SCRIPT
-        set -ex
-        git push "$REPO_PUSH_URL" ":$LOCAL_BRANCH_NAME"
-      SCRIPT
-      result, output = execute_script(
-        script,
-        env: git_auth_envvars.merge(
-          REPO_PUSH_URL: infer_git_https_url(repo.full_name),
-          LOCAL_BRANCH_NAME: local_branch_name
+    # @param repo_full_name [String]
+    # @raises [Octokit::Error]
+    def delete_local_branch(repo_full_name)
+      begin
+        log_debug('Deleting local branch', repo: repo_full_name, brach: local_branch_name)
+        @octokit.delete_ref(repo_full_name, "heads/#{local_branch_name}")
+      rescue Octokit::UnprocessableEntity => e
+        log_debug(
+          'Github ref delete API returned 422 Unprocessable Entity',
+          api_response_body: e.response_body
         )
-      )
-
-      if !result && output !~ /remote ref does not exist/
-        raise "Error deleting branch #{local_branch_name}. Script output:\n#{output}"
+        raise e if !error_is_ref_doesnt_exist?(e)
       end
     end
 
     # rubocop:enable Metrics/MethodLength
 
     def cancel_ci_run
-      run_id = find_github_actions_run_id_for_ref(repo, @state.commit_sha)
+      run_id = find_github_actions_run_id_for_ref(@state.repo, @state.commit_sha)
 
       if run_id.nil?
         log_debug(
@@ -349,38 +343,16 @@ module Pulljoy
       @octokit.cancel_workflow_run(@context.repo_full_name, run_id)
     end
 
-    # @param repo [Repository]
+    # @param repo_full_name [String]
     # @param commit_sha [String]
     # @return [String, nil]
-    def find_github_actions_run_id_for_ref(repo, commit_sha)
-      runs1 = @octokit.repository_workflow_runs(repo.full_name, status: 'queued')
-      runs2 = @octokit.repository_workflow_runs(repo.full_name, status: 'in_progress')
-      [runs1, runs2].each do |runs|
-        runs.each do |run|
+    def find_github_actions_run_id_for_ref(repo_full_name, commit_sha)
+      ['queued', 'in_progress'].each do |status|
+        @octokit.repository_workflow_runs(repo_full_name, status: status).workflow_runs.each do |run|
           return run.id if run.head_sha == commit_sha
         end
       end
       nil
-    end
-
-    # @param check_runs [Array]
-    # @return [String]
-    def render_check_run_conclusions_markdown_list(check_runs)
-      result = String.new
-      check_runs.each do |check_run|
-        case check_run.conclusion
-        when 'success'
-          icon = '✅'
-        when 'failure', 'cancelled', 'timed_out', 'stale'
-          icon = '❌'
-        when 'action_required'
-          icon = '⚠️'
-        else
-          icon = '❔'
-        end
-        result << " * [#{icon} #{check_run.app.name}: #{check_run.output.title}](#{check_run.html_url})\n"
-      end
-      result
     end
 
 
@@ -428,6 +400,10 @@ module Pulljoy
       SecureRandom.hex(5)
     end
 
+    # Try to load the state for the current pull request.
+    # Sets `@state`.
+    #
+    # @return [Boolean] Whether state was found.
     def load_state
       @state = State.where(
         repo: @context.repo_full_name,
@@ -437,19 +413,39 @@ module Pulljoy
         log_debug('No state found')
         false
       else
-        log_debug('Loaded state', state: @state.to_hash)
+        log_debug('Loaded state', state: @state.attributes)
         true
       end
     end
 
-    # @param props [Hash]
+    # Saves new state for the current pull request.
+    #
+    # @param props [Hash] All state properties to save. Any properties not listed here will be cleared.
     def save_state(props)
-      new_state = State.new(props)
-      raise NotImplementedError
+      if @state || load_state
+        new_attrs = @state.attributes.with_indifferent_access
+        new_attrs.delete('created_at')
+        new_attrs.delete('updated_at')
+        State.primary_keys.each do |key|
+          new_attrs.delete(key)
+        end
+        new_attrs.each_key do |key|
+          new_attrs[key] = nil
+        end
+        new_attrs.merge!(props)
+
+        @state.attributes = new_attrs
+        @state.save!
+      else
+        @state = State.create!(props.merge!(
+          repo: @context.repo_full_name,
+          pr_num: @context.pr_num,
+        ))
+      end
     end
 
     def reset_state
-      raise NotImplementedError
+      @state.destroy!
     end
 
     # @return [String]
@@ -470,7 +466,7 @@ module Pulljoy
     def git_auth_envvars
       if @config.git_auth_strategy == 'token'
         {
-          GIT_ASKPASS: "#{SELFDIR}/git-askpass-helper.sh",
+          GIT_ASKPASS: "#{SELFDIR}/scripts/git-askpass-helper.sh",
           GIT_TOKEN: @config.git_auth_token
         }
       else
@@ -481,23 +477,6 @@ module Pulljoy
     # @return [String]
     def local_branch_name
       "pulljoy/#{@context.pr_num}"
-    end
-
-    # @param script [String]
-    # @param env [Hash<Symbol, String>]
-    # @param chdir [String, nil]
-    def execute_script(script, env:, chdir: nil)
-      opts = {
-        in: ['/dev/null', 'r'],
-        err: [:child, :out],
-        close_others: true
-      }
-      opts[:chdir] = chdir if chdir
-
-      output = IO.popen(env, script, 'r:utf-8', opts) do |io|
-        io.read
-      end
-      [$CHILD_STATUS.success?, output]
     end
 
     def post_comment(message)
@@ -522,10 +501,44 @@ module Pulljoy
       %w(admin write).include?(level)
     end
 
-    # @param commit_sha [String]
+    # Checks whether this error is a "ref does not exist" error.
+    #
+    # @param github_ref_delete_error [Octokit::UnprocessableEntity]
+    # @param [Boolean]
+    def error_is_ref_doesnt_exist?(github_ref_delete_error)
+      begin
+        doc = JSON.parse(github_ref_delete_error.response_body)
+      rescue JSON::ParserError
+        log_warn(
+          'Error parsing Github ref delete API error response body as JSON',
+          api_response_body: e.response_body
+        )
+        return false
+      end
+
+      return false if !doc.is_a?(Hash) || !doc['message'].is_a?(String)
+
+      doc['message'] =~ /Reference does not exist/
+    end
+
+    # @param check_runs [Array]
     # @return [String]
-    def shorten_commit_sha(commit_sha)
-      commit_sha[0..7]
+    def render_check_run_conclusions_markdown_list(check_runs)
+      result = String.new
+      check_runs.each do |check_run|
+        case check_run.conclusion
+        when 'success'
+          icon = '✅'
+        when 'failure', 'cancelled', 'timed_out', 'stale'
+          icon = '❌'
+        when 'action_required'
+          icon = '⚠️'
+        else
+          icon = '❔'
+        end
+        result << " * [#{icon} #{check_run.app.name}: #{check_run.output.title}](#{check_run.html_url})\n"
+      end
+      result
     end
 
     # @param check_suites [Array]

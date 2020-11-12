@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'dry-struct'
-require_relative 'types'
+require_relative 'utils'
 
 module Pulljoy
   class Repository < Dry::Struct
@@ -26,7 +26,6 @@ module Pulljoy
   class PullRequest < Dry::Struct
     transform_keys(&:to_sym)
 
-    attribute :node_id, Types::Strict::String
     attribute :number, Types::Strict::Integer
     attribute :head, PullRequestRepositoryReference
     attribute :base, PullRequestRepositoryReference
@@ -41,7 +40,6 @@ module Pulljoy
     transform_keys(&:to_sym)
 
     attribute :action, Types::Strict::String
-    attribute :number, Types::Strict::Integer
     attribute :repository, Repository
     attribute :user, User
     attribute :pull_request, PullRequest

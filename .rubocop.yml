@@ -1,3 +1,6 @@
+AllCops:
+  Exclude:
+    - db/schema.rb
 Style/StderrPuts:
   Enabled: false
 Style/Documentation:
@@ -19,14 +22,19 @@ Metrics/MethodLength:
 Metrics/BlockLength:
   Exclude:
     - Gemfile
+    - Rakefile
     - spec/*_spec.rb
 Metrics/ClassLength:
   Exclude:
     - lib/event_handler.rb
 
+Lint/DuplicateBranch: # (new in 1.3)
+  Enabled: true
 Lint/DuplicateRegexpCharacterClassElement: # (new in 1.1)
   Enabled: true
 Lint/EmptyBlock: # (new in 1.1)
+  Enabled: true
+Lint/EmptyClass: # (new in 1.3)
   Enabled: true
 Lint/NoReturnInBeginEndBlocks: # (new in 1.2)
   Enabled: true
@@ -41,6 +49,8 @@ Style/CollectionCompact: # (new in 1.2)
 Style/DocumentDynamicEvalDefinition: # (new in 1.1)
   Enabled: true
 Style/NegatedIfElseCondition: # (new in 1.2)
+  Enabled: true
+Style/NilLambda: # (new in 1.3)
   Enabled: true
 Style/SwapValues: # (new in 1.1)
   Enabled: true
