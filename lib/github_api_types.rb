@@ -54,7 +54,6 @@ module Pulljoy
     attribute :action, Types::Strict::String
     attribute :repository, Repository
     attribute :issue do
-      attribute :node_id, Types::Strict::String
       attribute :number, Types::Strict::Integer
     end
     attribute :comment do

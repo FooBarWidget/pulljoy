@@ -16,11 +16,14 @@ describe Pulljoy::EventHandler do
 
   around(:each) do |example|
     DatabaseCleaner.cleaning do
-      example.run
+      ActiveRecord::Base.transaction do
+        example.run
+      end
     end
   end
 
   let(:my_username) { 'pulljoy' }
+  let(:first_review_id) { 'first-review' }
 
   def create_event_handler
     Pulljoy::EventHandler.new(
@@ -59,27 +62,31 @@ describe Pulljoy::EventHandler do
       )
     end
 
-    def stub_comment_post
+    def stub_comment_post_req
       stub_request(
         :post,
         "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.pull_request.number}/comments"
       ).to_return(status: 200)
     end
 
+    def load_state
+      Pulljoy::EventHandler::State.where(
+        repo: event.repository.full_name,
+        pr_num: event.pull_request.number
+      ).first
+    end
+
     it 'requests a review' do
-      comment_post_req = stub_comment_post.with(body: /Please review whether it's safe to start a CI run/)
+      comment_post_req = stub_comment_post_req.with(body: /Please review whether it's safe to start a CI run/)
       create_event_handler.process(event)
       expect(comment_post_req).to have_been_requested
     end
 
     it 'transitions to the awaiting_manual_review state' do
-      stub_comment_post
+      stub_comment_post_req
       create_event_handler.process(event)
 
-      state = Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      state = load_state
       expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
     end
   end
@@ -112,27 +119,31 @@ describe Pulljoy::EventHandler do
       )
     end
 
-    def stub_comment_post
+    def stub_comment_post_req
       stub_request(
         :post,
         "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.pull_request.number}/comments"
       ).to_return(status: 200, body: '{}')
     end
 
+    def load_state
+      Pulljoy::EventHandler::State.where(
+        repo: event.repository.full_name,
+        pr_num: event.pull_request.number
+      ).first
+    end
+
     it 'requests a review' do
-      comment_post_req = stub_comment_post.with(body: /Please review whether it's safe to start a CI run/)
+      comment_post_req = stub_comment_post_req.with(body: /Please review whether it's safe to start a CI run/)
       create_event_handler.process(event)
       expect(comment_post_req).to have_been_requested
     end
 
     it 'transitions to the awaiting_manual_review state' do
-      stub_comment_post
+      stub_comment_post_req
       create_event_handler.process(event)
 
-      state = Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      state = load_state
       expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
     end
   end
@@ -165,12 +176,16 @@ describe Pulljoy::EventHandler do
       )
     end
 
-    it 'resets the state' do
-      create_event_handler.process(event)
-      state = Pulljoy::EventHandler::State.where(
+    def load_state
+      Pulljoy::EventHandler::State.where(
         repo: event.repository.full_name,
         pr_num: event.pull_request.number
       ).first
+    end
+
+    it 'resets the state' do
+      create_event_handler.process(event)
+      state = load_state
       expect(state).to be_nil
     end
 
@@ -187,7 +202,7 @@ describe Pulljoy::EventHandler do
       let(:local_branch_sha) { 'local' }
       let(:workflow_run_id) { 1337 }
 
-      def stub_query_runs
+      def stub_query_runs_req
         stub_request(
           :get,
           "https://api.github.com/repos/#{event.repository.full_name}/actions/runs?status=queued"
@@ -206,7 +221,7 @@ describe Pulljoy::EventHandler do
         )
       end
 
-      def stub_cancel_run
+      def stub_cancel_run_req
         stub_request(
           :post,
           "https://api.github.com/repos/#{event.repository.full_name}" \
@@ -214,7 +229,7 @@ describe Pulljoy::EventHandler do
         ).to_return(status: 200)
       end
 
-      def stub_delete_branch
+      def stub_delete_branch_req
         stub_request(
           :delete,
           "https://api.github.com/repos/#{event.repository.full_name}" \
@@ -223,9 +238,9 @@ describe Pulljoy::EventHandler do
       end
 
       it 'cancels the CI build' do
-        query_runs_req = stub_query_runs
-        cancel_run_req = stub_cancel_run
-        stub_delete_branch
+        query_runs_req = stub_query_runs_req
+        cancel_run_req = stub_cancel_run_req
+        stub_delete_branch_req
 
         create_event_handler.process(event)
         expect(query_runs_req).to have_been_requested
@@ -233,9 +248,9 @@ describe Pulljoy::EventHandler do
       end
 
       it 'deletes the local branch' do
-        stub_query_runs
-        stub_cancel_run
-        delete_branch_req = stub_delete_branch
+        stub_query_runs_req
+        stub_cancel_run_req
+        delete_branch_req = stub_delete_branch_req
 
         create_event_handler.process(event)
         expect(delete_branch_req).to have_been_requested
@@ -271,7 +286,6 @@ describe Pulljoy::EventHandler do
       )
     end
 
-    let(:first_review_id) { 'first-review' }
     let(:local_branch_sha) { 'local' }
     let(:workflow_run_id) { 1337 }
 
@@ -293,7 +307,7 @@ describe Pulljoy::EventHandler do
       )
     end
 
-    def stub_query_runs
+    def stub_query_runs_req
       stub_request(
         :get,
         "https://api.github.com/repos/#{event.repository.full_name}/actions/runs?status=queued"
@@ -312,7 +326,7 @@ describe Pulljoy::EventHandler do
       )
     end
 
-    def stub_cancel_run
+    def stub_cancel_run_req
       stub_request(
         :post,
         "https://api.github.com/repos/#{event.repository.full_name}" \
@@ -320,7 +334,7 @@ describe Pulljoy::EventHandler do
       ).to_return(status: 200)
     end
 
-    def stub_delete_branch
+    def stub_delete_branch_req
       stub_request(
         :delete,
         "https://api.github.com/repos/#{event.repository.full_name}" \
@@ -328,20 +342,27 @@ describe Pulljoy::EventHandler do
       ).to_return(status: 200)
     end
 
-    def stub_comment_post
+    def stub_comment_post_req
       stub_request(
         :post,
         "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.pull_request.number}/comments"
       ).to_return(status: 200, body: '{}')
     end
 
+    def load_state
+      Pulljoy::EventHandler::State.where(
+        repo: event.repository.full_name,
+        pr_num: event.pull_request.number
+      ).first
+    end
+
     it 'cancels the previous CI build' do
       initialize_with_awaiting_ci_state
 
-      query_runs_req = stub_query_runs
-      cancel_run_req = stub_cancel_run
-      stub_delete_branch
-      stub_comment_post
+      query_runs_req = stub_query_runs_req
+      cancel_run_req = stub_cancel_run_req
+      stub_delete_branch_req
+      stub_comment_post_req
 
       create_event_handler.process(event)
       expect(query_runs_req).to have_been_requested
@@ -351,10 +372,10 @@ describe Pulljoy::EventHandler do
     it 'deletes the local branch' do
       initialize_with_awaiting_ci_state
 
-      stub_query_runs
-      stub_cancel_run
-      delete_branch_req = stub_delete_branch
-      stub_comment_post
+      stub_query_runs_req
+      stub_cancel_run_req
+      delete_branch_req = stub_delete_branch_req
+      stub_comment_post_req
 
       create_event_handler.process(event)
       expect(delete_branch_req).to have_been_requested
@@ -362,7 +383,7 @@ describe Pulljoy::EventHandler do
 
     it 'requests a review' do
       initialize_with_awaiting_manual_review_state
-      comment_post_req = stub_comment_post.with(body: /Please review whether it's safe to start a CI run/)
+      comment_post_req = stub_comment_post_req.with(body: /Please review whether it's safe to start a CI run/)
 
       create_event_handler.process(event)
 
@@ -371,40 +392,298 @@ describe Pulljoy::EventHandler do
 
     it 'transitions to the awaiting_manual_review state' do
       initialize_with_awaiting_manual_review_state
-      stub_comment_post
+      stub_comment_post_req
 
       create_event_handler.process(event)
 
-      state = Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      state = load_state
       expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
     end
 
     it 'changes the review ID' do
       initialize_with_awaiting_manual_review_state
-      stub_comment_post
+      stub_comment_post_req
 
       create_event_handler.process(event)
 
-      state = Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      state = load_state
       expect(state.review_id).not_to eq(first_review_id)
     end
   end
 
-  describe 'upon responding to a review request' do
-    describe 'when the wrong review ID is given' do
-      it 'tells the sender that the ID is wrong'
+  describe 'upon receiving a new issue comment' do
+    def initialize_with_awaiting_manual_review_state
+      Pulljoy::EventHandler::State.create!(
+        repo: event.repository.full_name,
+        pr_num: event.issue.number,
+        state_name: Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW,
+        review_id: first_review_id,
+      )
     end
-    describe 'when the right review ID is given' do
-      it 'creates a local branch'
+
+    def stub_collaborator_permission_req(permission_level)
+      stub_request(
+        :get,
+        "https://api.github.com/repos/#{event.repository.full_name}" \
+          "/collaborators/#{event.comment.user.login}/permission"
+      ).to_return(
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.generate(
+          permission: permission_level
+        )
+      )
     end
+
+    def stub_comment_post_req
+      stub_request(
+        :post,
+        "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.issue.number}/comments"
+      ).to_return(status: 200)
+    end
+
+    def load_state
+      Pulljoy::EventHandler::State.where(
+        repo: event.repository.full_name,
+        pr_num: event.issue.number
+      ).first
+    end
+
+    def assert_still_in_awaiting_manual_review_state
+      state = load_state
+      expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+      expect(state.review_id).to eq(first_review_id)
+    end
+
+    describe 'when the sender is Pulljoy' do
+      let(:event) do
+        Pulljoy::IssueCommentEvent.new(
+          action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+          repository: {
+            full_name: 'test/test'
+          },
+          issue: {
+            number: 123,
+          },
+          comment: {
+            id: 456,
+            body: 'hi',
+            user: {
+              login: my_username
+            }
+          }
+        )
+      end
+
+      it 'ignores the message' do
+        initialize_with_awaiting_manual_review_state
+        create_event_handler.process(event)
+
+        expect(@logio.string).to include('Ignoring comment by myself')
+        assert_still_in_awaiting_manual_review_state
+      end
+    end
+
     describe 'when the sender does not have write access to the repo' do
-      it 'ignores the response'
+      let(:event) do
+        Pulljoy::IssueCommentEvent.new(
+          action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+          repository: {
+            full_name: 'test/test'
+          },
+          issue: {
+            number: 123,
+          },
+          comment: {
+            id: 456,
+            body: 'hi',
+            user: {
+              login: 'someone'
+            }
+          }
+        )
+      end
+
+      it 'ignores the message' do
+        permission_req = stub_collaborator_permission_req('read')
+
+        initialize_with_awaiting_manual_review_state
+        create_event_handler.process(event)
+
+        expect(permission_req).to have_been_requested
+        expect(@logio.string).to include('Ignoring comment: user not authorized to send commands')
+        assert_still_in_awaiting_manual_review_state
+      end
+    end
+
+    describe 'when the comment contains no Pulljoy command' do
+      let(:event) do
+        Pulljoy::IssueCommentEvent.new(
+          action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+          repository: {
+            full_name: 'test/test'
+          },
+          issue: {
+            number: 123,
+          },
+          comment: {
+            id: 456,
+            body: 'hi',
+            user: {
+              login: 'someone'
+            }
+          }
+        )
+      end
+
+      it 'ignores the message' do
+        stub_collaborator_permission_req('write')
+        initialize_with_awaiting_manual_review_state
+        create_event_handler.process(event)
+
+        expect(@logio.string).to include('Ignoring comment: no command found in comment')
+        assert_still_in_awaiting_manual_review_state
+      end
+    end
+
+    describe 'when the comment contains an unsupported command' do
+      let(:event) do
+        Pulljoy::IssueCommentEvent.new(
+          action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+          repository: {
+            full_name: 'test/test'
+          },
+          issue: {
+            number: 123,
+          },
+          comment: {
+            id: 456,
+            body: "#{Pulljoy::COMMAND_PREFIX} foo",
+            user: {
+              login: 'someone'
+            }
+          }
+        )
+      end
+
+      it 'responds with an error message' do
+        stub_collaborator_permission_req('write')
+        comment_post_req = stub_comment_post_req.with(
+          body: /Sorry @#{Regexp.escape event.comment.user.login}: Unsupported command type \\"foo\\"/
+        )
+
+        initialize_with_awaiting_manual_review_state
+        create_event_handler.process(event)
+
+        expect(comment_post_req).to have_been_requested
+      end
+
+      it 'does not change state' do
+        stub_collaborator_permission_req('write')
+        stub_comment_post_req
+
+        initialize_with_awaiting_manual_review_state
+        create_event_handler.process(event)
+
+        assert_still_in_awaiting_manual_review_state
+      end
+    end
+
+    describe 'when the comment contains a command with invalid syntax' do
+      let(:event) do
+        Pulljoy::IssueCommentEvent.new(
+          action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+          repository: {
+            full_name: 'test/test'
+          },
+          issue: {
+            number: 123,
+          },
+          comment: {
+            id: 456,
+            body: "#{Pulljoy::COMMAND_PREFIX} approve",
+            user: {
+              login: 'someone'
+            }
+          }
+        )
+      end
+
+      it 'responds with an error message' do
+        stub_collaborator_permission_req('write')
+        comment_post_req = stub_comment_post_req.with(
+          body: /Sorry @#{Regexp.escape event.comment.user.login}: 'approve' command requires exactly 1 argument/
+        )
+
+        initialize_with_awaiting_manual_review_state
+        create_event_handler.process(event)
+
+        expect(comment_post_req).to have_been_requested
+      end
+
+      it 'does not change state' do
+        stub_collaborator_permission_req('write')
+        stub_comment_post_req
+
+        initialize_with_awaiting_manual_review_state
+        create_event_handler.process(event)
+
+        assert_still_in_awaiting_manual_review_state
+      end
+    end
+
+    describe 'when the comment contains a review request approval command' do
+      let(:event) do
+        Pulljoy::IssueCommentEvent.new(
+          action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+          repository: {
+            full_name: 'test/test'
+          },
+          issue: {
+            number: 123,
+          },
+          comment: {
+            id: 456,
+            body: "#{Pulljoy::COMMAND_PREFIX} approve #{first_review_id}",
+            user: {
+              login: 'someone'
+            }
+          }
+        )
+      end
+
+      describe 'when not in the awaiting_manual_review state' do
+        before :each do
+          Pulljoy::EventHandler::State.create!(
+            repo: event.repository.full_name,
+            pr_num: event.issue.number,
+            state_name: Pulljoy::EventHandler::STATE_STANDING_BY,
+          )
+        end
+
+        it 'ignores the message' do
+          stub_collaborator_permission_req('write')
+          create_event_handler.process(event)
+
+          expect(@logio.string).to match(/Ignoring command: currently not in .*? state/)
+
+          state = load_state
+          expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
+        end
+      end
+
+      describe 'when no state is available for the current pull request' do
+        it 'ignores the message'
+      end
+
+      describe 'when the wrong review ID is given' do
+        it 'tells the sender that the ID is wrong'
+        it 'stays in the awaiting_manual_review state'
+      end
+      describe 'when the right review ID is given' do
+        it 'creates a local branch'
+        it 'transitions to the awaiting_ci state'
+      end
     end
   end
 
@@ -421,6 +700,7 @@ describe Pulljoy::EventHandler do
     end
     describe 'if we are in the awaiting_ci state' do
       it 'reports the result'
+      it 'transitions to the standing_by state'
     end
   end
 

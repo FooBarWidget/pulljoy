@@ -29,10 +29,10 @@ module Pulljoy
 
         ApproveCommand.new(review_id: args[0])
       else
-        raise UnsupportedCommandType, "Unsupported command type #{args[0].inspect}"
+        raise UnsupportedCommandType, "Unsupported command type #{command_type.inspect}"
       end
     rescue Dry::Struct::Error => e
-      raise "Invalid command argument: #{e.message}"
+      raise CommandSyntaxError, "Invalid command argument: #{e.message}"
     end
   end
 

@@ -111,24 +111,12 @@ module Pulljoy
       log_debug("Processing 'synchronize' action")
       return if !load_state
 
-      case @state.state_name
-      when STATE_AWAITING_MANUAL_REVIEW
-        review_id = generate_review_id
-        request_manual_review(review_id)
-
-      when STATE_AWAITING_CI
+      if @state.state_name == STATE_AWAITING_CI
         cancel_ci_run
         delete_local_branch(event.repository.full_name)
-        review_id = generate_review_id
-        request_manual_review(review_id)
-
-      when STATE_STANDING_BY
-        review_id = generate_review_id
-        request_manual_review(review_id)
-
-      else
-        raise BugError, "in unexpected state #{@state.state_name}"
       end
+
+      request_manual_review(generate_review_id)
     end
 
     # @param event [PullRequestEvent]
@@ -140,19 +128,19 @@ module Pulljoy
         cancel_ci_run
         delete_local_branch(event.repository.full_name)
       end
+
       reset_state
     end
 
     # @param event [IssueCommentEvent]
     def process_issue_comment_created_event(event)
       log_debug("Processing 'created' action")
-      return if !load_state
 
       if user_is_myself?(@context.event_source_author)
         log_debug('Ignoring comment by myself')
         return
       end
-      if !user_authorized?(@context.event_source_author)
+      if !user_authorized?(@context.repo_full_name, @context.event_source_author)
         log_debug('Ignoring comment: user not authorized to send commands',
           username: @context.event_source_author)
         return
@@ -191,8 +179,12 @@ module Pulljoy
       end
 
       if command.review_id == @state.review_id
-        pr = PullRequest.new(@octokit.pull_request(
-          event.repository.full_name, event.issue.number).to_hash)
+        pr = PullRequest.new(
+          @octokit.pull_request(
+            event.repository.full_name,
+            event.issue.number
+          ).to_hash
+        )
         create_local_branch(pr.head, pr.base, pr.head.sha)
       else
         post_comment("Sorry @#{@context.event_source_author}, that was the wrong review ID." \
@@ -479,6 +471,7 @@ module Pulljoy
       "pulljoy/#{@context.pr_num}"
     end
 
+    # @param message [String]
     def post_comment(message)
       @octokit.add_comment(
         @context.repo_full_name,
@@ -493,12 +486,12 @@ module Pulljoy
       username == @my_username
     end
 
-    # @param repo [Repository]
+    # @param repo_full_name [String]
     # @param username [String]
     # @return [Boolean]
-    def user_authorized?(repo, username)
-      level = @octokit.permission_level(repo.full_name, username)
-      %w(admin write).include?(level)
+    def user_authorized?(repo_full_name, username)
+      level = @octokit.permission_level(repo_full_name, username)
+      %w(admin write).include?(level.permission)
     end
 
     # Checks whether this error is a "ref does not exist" error.
@@ -552,8 +545,8 @@ module Pulljoy
     # @param check_suites [Array]
     # @return [String]
     def get_overall_check_suites_conclusion(check_suites)
-      if check_suites.all? { |s| s.conclusion == 'success' }
-        'success'
+      if check_suites.map { |s| s.conclusion }.uniq.size == 1
+        check_suites[0].conclusion
       else
         'failure'
       end
