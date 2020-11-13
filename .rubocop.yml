@@ -1,6 +1,7 @@
 AllCops:
   Exclude:
     - db/schema.rb
+    - vendor/**/*
 Style/StderrPuts:
   Enabled: false
 Style/Documentation:
