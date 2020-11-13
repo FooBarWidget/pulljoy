@@ -43,4 +43,19 @@ module Pulljoy
   def self.shorten_commit_sha(commit_sha)
     commit_sha[0..7]
   end
+
+  # Sets all 'secondary' attributes on the given model to nil.
+  # A secondary attribute is everything except the primary keys,
+  # `created_at` and `updated_at`.
+  #
+  # @param model [ActiveRecord::Base]
+  def self.clear_secondary_attributes(model)
+    [
+      model.attributes.keys -
+        model.class.primary_keys -
+        %w[created_at updated_at]
+    ].each do |attr|
+      model[attr] = nil
+    end
+  end
 end

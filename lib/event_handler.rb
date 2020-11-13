@@ -39,6 +39,7 @@ module Pulljoy
     end
 
     # @param event [PullRequestEvent, IssueCommentEvent]
+    # rubocop:disable Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/MethodLength
     def process(event)
       case event
       when PullRequestEvent
@@ -92,16 +93,18 @@ module Pulljoy
         raise ArgumentError, "Unsupported event type #{event.class}"
       end
     end
+    # rubocop:enable Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/MethodLength
 
-  private
+    private
+
     # @param event [PullRequestEvent]
-    def process_pull_request_opened_event(event)
+    def process_pull_request_opened_event(_event)
       log_debug("Processing 'open' action")
       request_manual_review(generate_review_id)
     end
 
     # @param event [PullRequestEvent]
-    def process_pull_request_reopened_event(event)
+    def process_pull_request_reopened_event(_event)
       log_debug("Processing 'reopen' action")
       request_manual_review(generate_review_id)
     end
@@ -133,6 +136,7 @@ module Pulljoy
     end
 
     # @param event [IssueCommentEvent]
+    # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
     def process_issue_comment_created_event(event)
       log_debug("Processing 'created' action")
 
@@ -141,8 +145,7 @@ module Pulljoy
         return
       end
       if !user_authorized?(@context.repo_full_name, @context.event_source_author)
-        log_debug('Ignoring comment: user not authorized to send commands',
-          username: @context.event_source_author)
+        log_debug('Ignoring comment: user not authorized to send commands', username: @context.event_source_author)
         return
       end
 
@@ -167,9 +170,11 @@ module Pulljoy
         raise BugError, "unsupported command type #{command.class}"
       end
     end
+    # rubocop:enable Metrics/AbcSize, Metrics/MethodLength
 
     # @param event [IssueCommentEvent]
     # @param command [ApproveCommand]
+    # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
     def process_approve_command(event, command)
       return if !load_state
 
@@ -185,13 +190,22 @@ module Pulljoy
             event.issue.number
           ).to_hash
         )
-        create_local_branch(pr.head, pr.base, pr.head.sha)
+        create_local_branch(
+          pr.head.repo.full_name,
+          pr.base.repo.full_name,
+          pr.head.sha
+        )
+        save_state(
+          state_name: STATE_AWAITING_CI,
+          commit_sha: pr.head.sha,
+        )
       else
         post_comment("Sorry @#{@context.event_source_author}, that was the wrong review ID." \
-          " Please check whether you posted the right ID, or whether the pull request needs to" \
-          " be re-reviewed.")
+          ' Please check whether you posted the right ID, or whether the pull request needs to' \
+          ' be re-reviewed.')
       end
     end
+    # rubocop:enable Metrics/AbcSize, Metrics/MethodLength
 
     # @param event [CheckSuiteEvent]
     def process_check_suite_completed_event(event)
@@ -222,6 +236,7 @@ module Pulljoy
 
     # @param event [CheckSuiteEvent]
     # @param pr [PullRequest]
+    # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
     def process_check_suite_completed_event_for_pr(event, pr)
       log_debug("Processing for PR #{pr.number}")
       set_context(
@@ -232,46 +247,46 @@ module Pulljoy
       return if !load_state
 
       if @state.state_name != STATE_AWAITING_CI
-        log_debug("Ignoring PR because state is not #{STATE_AWAITING_CI}",
-          state: @state.state_name)
+        log_debug("Ignoring PR because state is not #{STATE_AWAITING_CI}", state: @state.state_name)
         return
       end
 
       if state.commit_sha != event.check_suite.commit_sha
-        log_debug('Ignoring PR because the commit for which the check suite was completed, is not the one we expect',
+        log_debug(
+          'Ignoring PR because the commit for which the check suite was completed, is not the one we expect',
           expected_commit: state.commit_sha,
-          actual_commit: event.check_suite.commit_sha)
+          actual_commit: event.check_suite.commit_sha
+        )
         return
       end
 
-      check_suites = @octokit.
-        check_suites_for_ref(repo.full_name,
-          event.check_suite.head_sha).
-        check_suites
+      check_suites =
+        @octokit
+        .check_suites_for_ref(repo.full_name, event.check_suite.head_sha)
+        .check_suites
       if !all_check_suites_completed?(check_suites)
         log_debug('Ignoring PR because not all check suites for this commit are completed')
         return
       end
 
-      check_runs = @octokit.
-        check_runs_for_ref(repo.full_name,
-          event.check_suite.head_sha).
-        check_runs
+      check_runs =
+        @octokit
+        .check_runs_for_ref(repo.full_name, event.check_suite.head_sha)
+        .check_runs
 
-      overall_conclusion = get_overall_check_suites_conclusion(
-        check_suites)
+      overall_conclusion = get_overall_check_suites_conclusion(check_suites)
       short_sha = Pulljoy.shorten_commit_sha(event.check_suite.head_sha)
       delete_local_branch(event.repository.full_name)
       post_comment("CI run for #{short_sha} completed.\n\n" \
         " * Conclusion: #{overall_conclusion}\n" +
         render_check_run_conclusions_markdown_list(check_runs))
     end
+    # rubocop:enable Metrics/AbcSize, Metrics/MethodLength
 
-    # rubocop:disable Metrics/MethodLength
-
-    # @param source_repo [PullRequestRepositoryReference]
-    # @param target_repo [PullRequestRepositoryReference]
+    # @param source_repo [String]
+    # @param target_repo [String]
     # @param commit_sha [String]
+    # rubocop:disable Metrics/MethodLength
     def create_local_branch(source_repo, target_repo, commit_sha)
       Dir.mktempdir do |tmpdir|
         script = <<~SCRIPT
@@ -285,36 +300,31 @@ module Pulljoy
         result, output = Pulljoy.execute_script(
           script,
           env: git_auth_envvars.merge(
-            SOURCE_REPO_CLONE_URL: infer_git_url(source_repo.full_name),
+            SOURCE_REPO_CLONE_URL: infer_git_url(source_repo),
             SOURCE_REPO_COMMIT_SHA: commit_sha,
-            TARGET_REPO_PUSH_URL: infer_git_https_url(target_repo.full_name),
+            TARGET_REPO_PUSH_URL: infer_git_https_url(target_repo),
             LOCAL_BRANCH_NAME: local_branch_name,
           ),
           chdir: tmpdir
         )
 
-        if !result
-          raise "Error creating branch #{local_branch_name}. Script output:\n#{output}"
-        end
+        raise "Error creating branch #{local_branch_name}. Script output:\n#{output}" if !result
       end
     end
+    # rubocop:enable Metrics/MethodLength
 
     # @param repo_full_name [String]
     # @raises [Octokit::Error]
     def delete_local_branch(repo_full_name)
-      begin
-        log_debug('Deleting local branch', repo: repo_full_name, brach: local_branch_name)
-        @octokit.delete_ref(repo_full_name, "heads/#{local_branch_name}")
-      rescue Octokit::UnprocessableEntity => e
-        log_debug(
-          'Github ref delete API returned 422 Unprocessable Entity',
-          api_response_body: e.response_body
-        )
-        raise e if !error_is_ref_doesnt_exist?(e)
-      end
+      log_debug('Deleting local branch', repo: repo_full_name, brach: local_branch_name)
+      @octokit.delete_ref(repo_full_name, "heads/#{local_branch_name}")
+    rescue Octokit::UnprocessableEntity => e
+      log_debug(
+        'Github ref delete API returned 422 Unprocessable Entity',
+        api_response_body: e.response_body
+      )
+      raise e if !error_is_ref_doesnt_exist?(e)
     end
-
-    # rubocop:enable Metrics/MethodLength
 
     def cancel_ci_run
       run_id = find_github_actions_run_id_for_ref(@state.repo, @state.commit_sha)
@@ -339,7 +349,7 @@ module Pulljoy
     # @param commit_sha [String]
     # @return [String, nil]
     def find_github_actions_run_id_for_ref(repo_full_name, commit_sha)
-      ['queued', 'in_progress'].each do |status|
+      %w[queued in_progress].each do |status|
         @octokit.repository_workflow_runs(repo_full_name, status: status).workflow_runs.each do |run|
           return run.id if run.head_sha == commit_sha
         end
@@ -415,24 +425,16 @@ module Pulljoy
     # @param props [Hash] All state properties to save. Any properties not listed here will be cleared.
     def save_state(props)
       if @state || load_state
-        new_attrs = @state.attributes.with_indifferent_access
-        new_attrs.delete('created_at')
-        new_attrs.delete('updated_at')
-        State.primary_keys.each do |key|
-          new_attrs.delete(key)
-        end
-        new_attrs.each_key do |key|
-          new_attrs[key] = nil
-        end
-        new_attrs.merge!(props)
-
-        @state.attributes = new_attrs
+        Pulljoy.clear_secondary_attributes(@state)
+        @state.attributes = props
         @state.save!
       else
-        @state = State.create!(props.merge!(
-          repo: @context.repo_full_name,
-          pr_num: @context.pr_num,
-        ))
+        @state = State.create!(
+          props.merge!(
+            repo: @context.repo_full_name,
+            pr_num: @context.pr_num,
+          )
+        )
       end
     end
 
@@ -491,7 +493,7 @@ module Pulljoy
     # @return [Boolean]
     def user_authorized?(repo_full_name, username)
       level = @octokit.permission_level(repo_full_name, username)
-      %w(admin write).include?(level.permission)
+      %w[admin write].include?(level.permission)
     end
 
     # Checks whether this error is a "ref does not exist" error.

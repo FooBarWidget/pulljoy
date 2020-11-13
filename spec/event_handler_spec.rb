@@ -673,16 +673,98 @@ describe Pulljoy::EventHandler do
       end
 
       describe 'when no state is available for the current pull request' do
-        it 'ignores the message'
+        it 'ignores the message' do
+          stub_collaborator_permission_req('write')
+          create_event_handler.process(event)
+
+          expect(@logio.string).to include('No state found')
+          expect(load_state).to be_nil
+        end
       end
 
       describe 'when the wrong review ID is given' do
-        it 'tells the sender that the ID is wrong'
-        it 'stays in the awaiting_manual_review state'
+        before :each do
+          Pulljoy::EventHandler::State.create!(
+            repo: event.repository.full_name,
+            pr_num: event.issue.number,
+            state_name: Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW,
+            review_id: "not #{first_review_id}",
+          )
+        end
+
+        it 'tells the sender that the ID is wrong' do
+          stub_collaborator_permission_req('write')
+          comment_post_req = stub_comment_post_req.with(
+            body: /that was the wrong review ID/
+          )
+
+          create_event_handler.process(event)
+
+          expect(comment_post_req).to have_been_requested
+        end
+
+        it 'stays in the awaiting_manual_review state' do
+          stub_collaborator_permission_req('write')
+          stub_comment_post_req
+
+          create_event_handler.process(event)
+
+          state = load_state
+          expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+          expect(state.review_id).to eq("not #{first_review_id}")
+        end
       end
+
       describe 'when the right review ID is given' do
-        it 'creates a local branch'
-        it 'transitions to the awaiting_ci state'
+        def stub_pull_request_req
+          stub_request(
+            :get, "https://api.github.com/repos/#{event.repository.full_name}/pulls/#{event.issue.number}"
+          ).to_return(
+            status: 200,
+            headers: { 'Content-Type' => 'application/json' },
+            body: JSON.generate(
+              number: event.issue.number,
+              head: {
+                sha: 'fork-commit',
+                repo: {
+                  full_name: 'fork/test'
+                }
+              },
+              base: {
+                sha: 'base-commit',
+                repo: event.repository.to_hash
+              }
+            )
+          )
+        end
+
+        it 'creates a local branch' do
+          initialize_with_awaiting_manual_review_state
+          stub_collaborator_permission_req('write')
+          pull_request_req = stub_pull_request_req
+
+          handler = create_event_handler
+          expect(handler).to receive(:create_local_branch)
+            .with('fork/test', 'test/test', 'fork-commit')
+            .and_return([true, ''])
+          handler.process(event)
+          expect(pull_request_req).to have_been_requested
+        end
+
+        it 'transitions to the awaiting_ci state' do
+          initialize_with_awaiting_manual_review_state
+          stub_collaborator_permission_req('write')
+          stub_pull_request_req
+
+          handler = create_event_handler
+          allow(handler).to receive(:create_local_branch).and_return([true, ''])
+          handler.process(event)
+
+          state = load_state
+          expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+          expect(state.commit_sha).to eq('fork-commit')
+          p state
+        end
       end
     end
   end
