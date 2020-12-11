@@ -65,16 +65,20 @@ module Pulljoy
 
   class CheckSuiteEvent < Dry::Struct
     ACTION_COMPLETED = 'completed'
+    STATUS_COMPLETED = 'completed'
+    CONCLUSION_SUCCESS = 'success'
 
     transform_keys(&:to_sym)
 
     attribute :action, Types::Strict::String
     attribute :repository, Repository
     attribute :check_suite do
-      attribute :node_id, Types::Strict::String
       attribute :head_sha, Types::Strict::String
+      attribute :status, Types::Strict::String
       attribute :conclusion, Types::Strict::String
-      attribute :pull_requests, Types::Array.of(PullRequest)
+      attribute :pull_requests, Types::Strict::Array do
+        attribute :number, Types::Strict::Integer
+      end
     end
   end
 end

@@ -763,17 +763,66 @@ describe Pulljoy::EventHandler do
           state = load_state
           expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
           expect(state.commit_sha).to eq('fork-commit')
-          p state
         end
       end
     end
   end
 
   describe 'upon CI run completion' do
-    describe 'if the run is not for the latest pushed commit'
-    describe 'if the run is not for a repo we know about'
-    describe 'if the run is not for a PR for which we have state'
-    describe 'if not all check suites for the commit are completed'
+    def load_state
+      Pulljoy::EventHandler::State.where(
+        repo: event.repository.full_name,
+        pr_num: event.check_suite.pull_requests[0].number
+      ).first
+    end
+
+    describe 'if the run is not for the latest pushed commit' do
+      let(:event) do
+        Pulljoy::CheckSuiteEvent.new(
+          action: Pulljoy::CheckSuiteEvent::ACTION_COMPLETED,
+          repository: {
+            full_name: 'test/test'
+          },
+          check_suite: {
+            head_sha: 'head',
+            status: Pulljoy::CheckSuiteEvent::STATUS_COMPLETED,
+            conclusion: Pulljoy::CheckSuiteEvent::CONCLUSION_SUCCESS,
+            pull_requests: [
+              {
+                number: 123,
+              }
+            ]
+          }
+        )
+      end
+
+      before :each do
+        Pulljoy::EventHandler::State.create!(
+          repo: event.repository.full_name,
+          pr_num: event.check_suite.pull_requests[0].number,
+          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          commit_sha: 'latest',
+        )
+      end
+
+      it 'ignores the event' do
+        create_event_handler.process(event)
+
+        expect(@logio.string).to match(
+          /the commit for which the check suite was completed, is not the one we expect/)
+        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+      end
+    end
+
+    describe 'if the run is not for a repo we know about' do
+      it 'ignores the event'
+    end
+    describe 'if the run is not for a PR for which we have state' do
+      it 'ignores the event'
+    end
+    describe 'if not all check suites for the commit are completed' do
+      it 'ignores the event'
+    end
     describe 'if we are in the awaiting_manual_review state' do
       it 'ignores the event'
     end

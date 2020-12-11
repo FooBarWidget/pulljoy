@@ -216,7 +216,7 @@ module Pulljoy
         return
       end
 
-      event.check_suite.pull_requests do |pr|
+      event.check_suite.pull_requests.each do |pr|
         process_check_suite_completed_event_for_pr(event, pr)
       end
     end
@@ -251,11 +251,11 @@ module Pulljoy
         return
       end
 
-      if state.commit_sha != event.check_suite.commit_sha
+      if @state.commit_sha != event.check_suite.head_sha
         log_debug(
           'Ignoring PR because the commit for which the check suite was completed, is not the one we expect',
-          expected_commit: state.commit_sha,
-          actual_commit: event.check_suite.commit_sha
+          expected_commit: @state.commit_sha,
+          actual_commit: event.check_suite.head_sha
         )
         return
       end
