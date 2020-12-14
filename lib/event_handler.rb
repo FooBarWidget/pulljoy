@@ -25,6 +25,27 @@ module Pulljoy
 
     class State < ActiveRecord::Base
       self.primary_keys = [:repo, :pr_num]
+
+      validates :review_id, presence: true, if: :state_is_awaiting_manual_review?
+      validates :review_id, absence: true, if: :state_not_awaiting_manual_review?
+      validates :commit_sha, presence: true, if: :state_is_awaiting_ci?
+      validates :commit_sha, absence: true, if: :state_not_awaiting_ci?
+
+      def state_is_awaiting_manual_review?
+        state_name == EventHandler::STATE_AWAITING_MANUAL_REVIEW
+      end
+
+      def state_not_awaiting_manual_review?
+        state_name != EventHandler::STATE_AWAITING_MANUAL_REVIEW
+      end
+
+      def state_is_awaiting_ci?
+        state_name == EventHandler::STATE_AWAITING_CI
+      end
+
+      def state_not_awaiting_ci?
+        state_name != EventHandler::STATE_AWAITING_CI
+      end
     end
 
 
@@ -145,6 +166,7 @@ module Pulljoy
         return
       end
       if !user_authorized?(@context.repo_full_name, @context.event_source_author)
+        todo('we need to respond here, not just log')
         log_debug('Ignoring comment: user not authorized to send commands', username: @context.event_source_author)
         return
       end
@@ -179,6 +201,7 @@ module Pulljoy
       return if !load_state
 
       if @state.state_name != STATE_AWAITING_MANUAL_REVIEW
+        todo('we need to respond here, not just log')
         log_debug("Ignoring command: currently not in #{STATE_AWAITING_MANUAL_REVIEW} state")
         return
       end
@@ -244,7 +267,10 @@ module Pulljoy
         pr_num: pr.number,
       )
 
-      return if !load_state
+      if !load_state
+        log_debug("Ignoring PR because it's not known by Pulljoy")
+        return
+      end
 
       if @state.state_name != STATE_AWAITING_CI
         log_debug("Ignoring PR because state is not #{STATE_AWAITING_CI}", state: @state.state_name)
@@ -262,7 +288,7 @@ module Pulljoy
 
       check_suites =
         @octokit
-        .check_suites_for_ref(repo.full_name, event.check_suite.head_sha)
+        .check_suites_for_ref(event.repository.full_name, event.check_suite.head_sha)
         .check_suites
       if !all_check_suites_completed?(check_suites)
         log_debug('Ignoring PR because not all check suites for this commit are completed')
@@ -271,7 +297,7 @@ module Pulljoy
 
       check_runs =
         @octokit
-        .check_runs_for_ref(repo.full_name, event.check_suite.head_sha)
+        .check_runs_for_ref(event.repository.full_name, event.check_suite.head_sha)
         .check_runs
 
       overall_conclusion = get_overall_check_suites_conclusion(check_suites)

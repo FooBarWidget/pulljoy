@@ -66,6 +66,7 @@ module Pulljoy
   class CheckSuiteEvent < Dry::Struct
     ACTION_COMPLETED = 'completed'
     STATUS_COMPLETED = 'completed'
+    STATUS_QUEUED    = 'queued'
     CONCLUSION_SUCCESS = 'success'
 
     transform_keys(&:to_sym)
@@ -75,7 +76,7 @@ module Pulljoy
     attribute :check_suite do
       attribute :head_sha, Types::Strict::String
       attribute :status, Types::Strict::String
-      attribute :conclusion, Types::Strict::String
+      attribute? :conclusion, Types::Strict::String.optional
       attribute :pull_requests, Types::Strict::Array do
         attribute :number, Types::Strict::Integer
       end

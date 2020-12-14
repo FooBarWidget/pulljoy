@@ -505,6 +505,8 @@ describe Pulljoy::EventHandler do
       end
 
       it 'ignores the message' do
+        pending
+
         permission_req = stub_collaborator_permission_req('read')
 
         initialize_with_awaiting_manual_review_state
@@ -662,6 +664,8 @@ describe Pulljoy::EventHandler do
         end
 
         it 'ignores the message' do
+          pending
+
           stub_collaborator_permission_req('write')
           create_event_handler.process(event)
 
@@ -814,24 +818,389 @@ describe Pulljoy::EventHandler do
       end
     end
 
-    describe 'if the run is not for a repo we know about' do
-      it 'ignores the event'
+    describe 'if the run is not for a repo for which we have state' do
+      let(:event) do
+        Pulljoy::CheckSuiteEvent.new(
+          action: Pulljoy::CheckSuiteEvent::ACTION_COMPLETED,
+          repository: {
+            full_name: 'test/test'
+          },
+          check_suite: {
+            head_sha: 'head',
+            status: Pulljoy::CheckSuiteEvent::STATUS_COMPLETED,
+            conclusion: Pulljoy::CheckSuiteEvent::CONCLUSION_SUCCESS,
+            pull_requests: [
+              {
+                number: 123,
+              }
+            ]
+          }
+        )
+      end
+
+      it 'ignores the event' do
+        create_event_handler.process(event)
+
+        expect(@logio.string).to match(
+          /Ignoring PR because it's not known by Pulljoy/)
+        expect(Pulljoy::EventHandler::State.count).to eq(0)
+      end
     end
+
     describe 'if the run is not for a PR for which we have state' do
-      it 'ignores the event'
+      let(:event) do
+        Pulljoy::CheckSuiteEvent.new(
+          action: Pulljoy::CheckSuiteEvent::ACTION_COMPLETED,
+          repository: {
+            full_name: 'test/test'
+          },
+          check_suite: {
+            head_sha: 'head',
+            status: Pulljoy::CheckSuiteEvent::STATUS_COMPLETED,
+            conclusion: Pulljoy::CheckSuiteEvent::CONCLUSION_SUCCESS,
+            pull_requests: [
+              {
+                number: 123,
+              }
+            ]
+          }
+        )
+      end
+
+      before :each do
+        Pulljoy::EventHandler::State.create!(
+          repo: event.repository.full_name,
+          pr_num: 456,
+          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          commit_sha: event.check_suite.head_sha,
+        )
+      end
+
+      it 'ignores the event' do
+        create_event_handler.process(event)
+
+        expect(@logio.string).to match(
+          /Ignoring PR because it's not known by Pulljoy/)
+        expect(Pulljoy::EventHandler::State.count).to eq(1)
+
+        state = Pulljoy::EventHandler::State.first
+        expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+      end
     end
+
     describe 'if not all check suites for the commit are completed' do
-      it 'ignores the event'
+      let(:event) do
+        Pulljoy::CheckSuiteEvent.new(
+          action: Pulljoy::CheckSuiteEvent::ACTION_COMPLETED,
+          repository: {
+            full_name: 'test/test'
+          },
+          check_suite: {
+            head_sha: 'head',
+            status: Pulljoy::CheckSuiteEvent::STATUS_COMPLETED,
+            conclusion: Pulljoy::CheckSuiteEvent::CONCLUSION_SUCCESS,
+            pull_requests: [
+              {
+                number: 123,
+              }
+            ]
+          }
+        )
+      end
+
+      before :each do
+        Pulljoy::EventHandler::State.create!(
+          repo: event.repository.full_name,
+          pr_num: event.check_suite.pull_requests[0].number,
+          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          commit_sha: event.check_suite.head_sha,
+        )
+      end
+
+      it 'ignores the event' do
+        pending
+
+        create_event_handler.process(event)
+
+        expect(@logio.string).to match(
+          /Ignoring PR because not all check suites for this commit are completed/)
+        expect(Pulljoy::EventHandler::State.count).to eq(1)
+
+        state = Pulljoy::EventHandler::State.first
+        expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+      end
     end
+
     describe 'if we are in the awaiting_manual_review state' do
-      it 'ignores the event'
+      let(:event) do
+        Pulljoy::CheckSuiteEvent.new(
+          action: Pulljoy::CheckSuiteEvent::ACTION_COMPLETED,
+          repository: {
+            full_name: 'test/test'
+          },
+          check_suite: {
+            head_sha: 'head',
+            status: Pulljoy::CheckSuiteEvent::STATUS_COMPLETED,
+            conclusion: Pulljoy::CheckSuiteEvent::CONCLUSION_SUCCESS,
+            pull_requests: [
+              {
+                number: 123,
+              }
+            ]
+          }
+        )
+      end
+
+      before :each do
+        Pulljoy::EventHandler::State.create!(
+          repo: event.repository.full_name,
+          pr_num: event.check_suite.pull_requests[0].number,
+          state_name: Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW,
+          review_id: first_review_id,
+        )
+      end
+
+      it 'ignores the event' do
+        create_event_handler.process(event)
+
+        expect(@logio.string).to match(
+          /Ignoring PR because state is not #{Regexp.escape Pulljoy::EventHandler::STATE_AWAITING_CI}/)
+        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+      end
     end
+
     describe 'if we are in the standing_by state' do
-      it 're-reports the result'
+      let(:event) do
+        Pulljoy::CheckSuiteEvent.new(
+          action: Pulljoy::CheckSuiteEvent::ACTION_COMPLETED,
+          repository: {
+            full_name: 'test/test'
+          },
+          check_suite: {
+            head_sha: 'head',
+            status: Pulljoy::CheckSuiteEvent::STATUS_COMPLETED,
+            conclusion: Pulljoy::CheckSuiteEvent::CONCLUSION_SUCCESS,
+            pull_requests: [
+              {
+                number: 123,
+              }
+            ]
+          }
+        )
+      end
+
+      before :each do
+        Pulljoy::EventHandler::State.create!(
+          repo: event.repository.full_name,
+          pr_num: event.check_suite.pull_requests[0].number,
+          state_name: Pulljoy::EventHandler::STATE_STANDING_BY,
+        )
+      end
+
+      def stub_comment_post_req
+        stub_request(
+          :post,
+          "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.check_suite.pull_requests[0].number}/comments"
+        ).to_return(status: 200)
+      end
+
+      def stub_check_suites_for_ref
+        stub_request(
+          :get,
+          "https://api.github.com/repos/#{event.repository.full_name}" \
+            "/commits/#{event.check_suite.head_sha}/check-suites"
+        ).to_return(
+          status: 200,
+          headers: { 'Content-Type' => 'application/json' },
+          body: JSON.generate(
+            total_count: 1,
+            check_suites: [
+              {
+                status: 'completed'
+              }
+            ]
+          )
+        )
+      end
+
+      def stub_check_runs_for_ref
+        stub_request(
+          :get,
+          "https://api.github.com/repos/#{event.repository.full_name}" \
+            "/commits/#{event.check_suite.head_sha}/check-runs"
+        ).to_return(
+          status: 200,
+          headers: { 'Content-Type' => 'application/json' },
+          body: JSON.generate(
+            total_count: 1,
+            check_runs: [
+              {
+                conclusion: 'success',
+                html_url: 'http://check-run',
+                app: {
+                  name: 'Github Actions',
+                },
+                output: {
+                  title: 'CI complete',
+                }
+              }
+            ]
+          )
+        )
+      end
+
+      it 're-reports the result' do
+        pending
+
+        stub_check_suites_for_ref
+        stub_check_runs_for_ref
+        comment_post_req = stub_comment_post_req.with(
+          body: /CI run for #{Regexp.escape event.check_suite.head_sha} complete/)
+
+        handler = create_event_handler
+        allow(handler).to receive(:delete_local_branch)
+
+        handler.process(event)
+
+        expect(comment_post_req).to have_been_requested
+      end
+
+      it 'remains in the standing_by state' do
+        stub_check_suites_for_ref
+        stub_check_runs_for_ref
+        stub_comment_post_req
+
+        handler = create_event_handler
+        allow(handler).to receive(:delete_local_branch)
+
+        handler.process(event)
+
+        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
+      end
     end
+
     describe 'if we are in the awaiting_ci state' do
-      it 'reports the result'
-      it 'transitions to the standing_by state'
+      let(:event) do
+        Pulljoy::CheckSuiteEvent.new(
+          action: Pulljoy::CheckSuiteEvent::ACTION_COMPLETED,
+          repository: {
+            full_name: 'test/test'
+          },
+          check_suite: {
+            head_sha: 'head',
+            status: Pulljoy::CheckSuiteEvent::STATUS_COMPLETED,
+            conclusion: Pulljoy::CheckSuiteEvent::CONCLUSION_SUCCESS,
+            pull_requests: [
+              {
+                number: 123,
+              }
+            ]
+          }
+        )
+      end
+
+      before :each do
+        Pulljoy::EventHandler::State.create!(
+          repo: event.repository.full_name,
+          pr_num: event.check_suite.pull_requests[0].number,
+          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          commit_sha: event.check_suite.head_sha,
+        )
+      end
+
+      def stub_comment_post_req
+        stub_request(
+          :post,
+          "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.check_suite.pull_requests[0].number}/comments"
+        ).to_return(status: 200)
+      end
+
+      def stub_check_suites_for_ref
+        stub_request(
+          :get,
+          "https://api.github.com/repos/#{event.repository.full_name}" \
+            "/commits/#{event.check_suite.head_sha}/check-suites"
+        ).to_return(
+          status: 200,
+          headers: { 'Content-Type' => 'application/json' },
+          body: JSON.generate(
+            total_count: 1,
+            check_suites: [
+              {
+                status: 'completed'
+              }
+            ]
+          )
+        )
+      end
+
+      def stub_check_runs_for_ref
+        stub_request(
+          :get,
+          "https://api.github.com/repos/#{event.repository.full_name}" \
+            "/commits/#{event.check_suite.head_sha}/check-runs"
+        ).to_return(
+          status: 200,
+          headers: { 'Content-Type' => 'application/json' },
+          body: JSON.generate(
+            total_count: 1,
+            check_runs: [
+              {
+                conclusion: 'success',
+                html_url: 'http://check-run',
+                app: {
+                  name: 'Github Actions',
+                },
+                output: {
+                  title: 'CI complete',
+                }
+              }
+            ]
+          )
+        )
+      end
+
+      it 'reports the result' do
+        check_suites_for_ref_req = stub_check_suites_for_ref
+        check_runs_for_ref_req = stub_check_runs_for_ref
+        comment_post_req = stub_comment_post_req.with(
+          body: /CI run for #{Regexp.escape event.check_suite.head_sha} complete/)
+
+        handler = create_event_handler
+        allow(handler).to receive(:delete_local_branch)
+
+        handler.process(event)
+
+        expect(check_suites_for_ref_req).to have_been_requested
+        expect(check_runs_for_ref_req).to have_been_requested
+        expect(comment_post_req).to have_been_requested
+      end
+
+      it 'transitions to the standing_by state' do
+        pending
+
+        stub_check_suites_for_ref
+        stub_check_runs_for_ref
+        stub_comment_post_req
+
+        handler = create_event_handler
+        allow(handler).to receive(:delete_local_branch)
+
+        handler.process(event)
+
+        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
+      end
+
+      it 'deletes the local branch' do
+        stub_check_suites_for_ref
+        stub_check_runs_for_ref
+        stub_comment_post_req
+
+        handler = create_event_handler
+        expect(handler).to receive(:delete_local_branch).with(event.repository.full_name)
+
+        handler.process(event)
+      end
     end
   end
 
