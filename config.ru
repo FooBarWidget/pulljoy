@@ -10,10 +10,10 @@ logger = Pulljoy::Boot.create_logger(config)
 octokit = Pulljoy::Boot.create_octokit(config)
 state_store = Pulljoy::Boot.create_state_store(config)
 
-Pulljoy::WebApp.set :environment, ENV['RACK_ENV']
-Pulljoy::WebApp.activate_pulljoy_config(config)
+Pulljoy::App::SinatraApp.set :environment, ENV['RACK_ENV']
+Pulljoy::App::SinatraApp.activate_pulljoy_config(config)
 
-run Pulljoy::WebApp.new(
+run Pulljoy::App::SinatraApp.new(
   event_handler_factory: Pulljoy::Factory.new(
     my_github_username: Pulljoy::Boot.infer_github_username(octokit),
     octokit: octokit,

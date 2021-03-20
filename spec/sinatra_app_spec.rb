@@ -11,7 +11,7 @@ require_relative '../lib/github_api_types'
 require_relative '../lib/factory'
 require_relative '../lib/state_store/memory_store'
 
-describe Pulljoy::WebApp do
+describe Pulljoy::App::SinatraApp do
   include Rack::Test::Methods
 
   let(:event_handler_factory) { Pulljoy::Factory.new(Pulljoy::EventHandler) }
@@ -23,9 +23,9 @@ describe Pulljoy::WebApp do
   end
 
   let(:app) do
-    Pulljoy::WebApp.set :environment, 'test'
-    Pulljoy::WebApp.activate_pulljoy_config(PULLJOY_TEST_CONFIG)
-    Pulljoy::WebApp.new(
+    Pulljoy::App::SinatraApp.set :environment, 'test'
+    Pulljoy::App::SinatraApp.activate_pulljoy_config(PULLJOY_TEST_CONFIG)
+    Pulljoy::App::SinatraApp.new(
       logger: logger,
       event_handler_factory: event_handler_factory,
       state_store: Pulljoy::StateStore::MemoryStore.new,
