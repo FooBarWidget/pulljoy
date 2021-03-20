@@ -8,6 +8,7 @@ module Pulljoy
   COMMAND_PREFIX_RE = /^#{Regexp.escape(COMMAND_PREFIX)} /.freeze
 
   class UnsupportedCommandType < StandardError; end
+
   class CommandSyntaxError < StandardError; end
 
   # Parses the given text as a command.
