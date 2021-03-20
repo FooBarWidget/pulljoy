@@ -9,24 +9,12 @@ on:
 jobs:
   check:
     runs-on: ubuntu-20.04
-    services:
-      postgres:
-        image: postgres:13
-        env:
-          POSTGRES_PASSWORD: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-ruby@v1
         with:
           ruby-version: '2.7'
-      - uses: actions/cache@v1
+      - uses: actions/cache@v2
         with:
           path: vendor/bundle
           key: ${{ runner.os }}-gems-${{ hashFiles('Gemfile.lock') }}
@@ -41,16 +29,6 @@ jobs:
           bundle config set path vendor/bundle
           bundle install --jobs 4 --retry 3 --without development
           bundle clean
-
-      - name: Setup database authentication
-        run: |
-          cp config/test-database-config.github-actions.yml config/test-database-config.yml
-          echo 'localhost:5432:postgres:postgres:postgres' > pgpass
-          chmod 600 pgpass
-      - name: Create test database
-        run: createdb --host=localhost --port=5432 --username=postgres --maintenance-db=postgres --owner=postgres --no-password pulljoy_test
-        env:
-          PGPASSFILE: pgpass
 
       - name: RSpec
         run: bundle exec rspec --force-color

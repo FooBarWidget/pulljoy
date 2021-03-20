@@ -5,6 +5,8 @@ require 'json'
 require 'stringio'
 require 'octokit'
 require_relative '../lib/event_handler'
+require_relative '../lib/state'
+require_relative '../lib/state_store/memory_store'
 
 describe Pulljoy::EventHandler do
   before :each do
@@ -12,14 +14,7 @@ describe Pulljoy::EventHandler do
     @logger = Ougai::Logger.new(@logio)
     @logger.level = :debug
     @octokit = Octokit::Client.new(access_token: PULLJOY_TEST_CONFIG.github_access_token)
-  end
-
-  around(:each) do |example|
-    DatabaseCleaner.cleaning do
-      ActiveRecord::Base.transaction do
-        example.run
-      end
-    end
+    @state_store = Pulljoy::StateStore::MemoryStore.new
   end
 
   let(:my_username) { 'pulljoy' }
@@ -31,7 +26,14 @@ describe Pulljoy::EventHandler do
       octokit: @octokit,
       logger: @logger,
       my_username: my_username,
+      state_store: @state_store,
     )
+  end
+
+  def save_state(props)
+    state = Pulljoy::State.new(props)
+    state.validate!
+    @state_store.save(props[:repo_full_name], props[:pr_num], state)
   end
 
   describe 'upon opening a pull request' do
@@ -70,10 +72,7 @@ describe Pulljoy::EventHandler do
     end
 
     def load_state
-      Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      @state_store.load(event.repository.full_name, event.pull_request.number)
     end
 
     it 'requests a review' do
@@ -87,7 +86,7 @@ describe Pulljoy::EventHandler do
       create_event_handler.process(event)
 
       state = load_state
-      expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+      expect(state.state_name).to eq(Pulljoy::State::AWAITING_MANUAL_REVIEW)
     end
   end
 
@@ -127,10 +126,7 @@ describe Pulljoy::EventHandler do
     end
 
     def load_state
-      Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      @state_store.load(event.repository.full_name, event.pull_request.number)
     end
 
     it 'requests a review' do
@@ -144,7 +140,7 @@ describe Pulljoy::EventHandler do
       create_event_handler.process(event)
 
       state = load_state
-      expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+      expect(state.state_name).to eq(Pulljoy::State::AWAITING_MANUAL_REVIEW)
     end
   end
 
@@ -177,10 +173,7 @@ describe Pulljoy::EventHandler do
     end
 
     def load_state
-      Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      @state_store.load(event.repository.full_name, event.pull_request.number)
     end
 
     it 'resets the state' do
@@ -191,10 +184,10 @@ describe Pulljoy::EventHandler do
 
     describe 'when a CI build is in progress' do
       before :each do
-        Pulljoy::EventHandler::State.create!(
-          repo: event.repository.full_name,
+        save_state(
+          repo_full_name: event.repository.full_name,
           pr_num: event.pull_request.number,
-          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          state_name: Pulljoy::State::AWAITING_CI,
           commit_sha: local_branch_sha,
         )
       end
@@ -290,19 +283,19 @@ describe Pulljoy::EventHandler do
     let(:workflow_run_id) { 1337 }
 
     def initialize_with_awaiting_manual_review_state
-      Pulljoy::EventHandler::State.create!(
-        repo: event.repository.full_name,
+      save_state(
+        repo_full_name: event.repository.full_name,
         pr_num: event.pull_request.number,
-        state_name: Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW,
+        state_name: Pulljoy::State::AWAITING_MANUAL_REVIEW,
         review_id: first_review_id,
       )
     end
 
     def initialize_with_awaiting_ci_state
-      Pulljoy::EventHandler::State.create!(
-        repo: event.repository.full_name,
+      save_state(
+        repo_full_name: event.repository.full_name,
         pr_num: event.pull_request.number,
-        state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+        state_name: Pulljoy::State::AWAITING_CI,
         commit_sha: local_branch_sha,
       )
     end
@@ -350,10 +343,7 @@ describe Pulljoy::EventHandler do
     end
 
     def load_state
-      Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.pull_request.number
-      ).first
+      @state_store.load(event.repository.full_name, event.pull_request.number)
     end
 
     it 'cancels the previous CI build' do
@@ -397,7 +387,7 @@ describe Pulljoy::EventHandler do
       create_event_handler.process(event)
 
       state = load_state
-      expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+      expect(state.state_name).to eq(Pulljoy::State::AWAITING_MANUAL_REVIEW)
     end
 
     it 'changes the review ID' do
@@ -413,10 +403,10 @@ describe Pulljoy::EventHandler do
 
   describe 'upon receiving a new issue comment' do
     def initialize_with_awaiting_manual_review_state
-      Pulljoy::EventHandler::State.create!(
-        repo: event.repository.full_name,
+      save_state(
+        repo_full_name: event.repository.full_name,
         pr_num: event.issue.number,
-        state_name: Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW,
+        state_name: Pulljoy::State::AWAITING_MANUAL_REVIEW,
         review_id: first_review_id,
       )
     end
@@ -443,15 +433,12 @@ describe Pulljoy::EventHandler do
     end
 
     def load_state
-      Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.issue.number
-      ).first
+      @state_store.load(event.repository.full_name, event.issue.number)
     end
 
     def assert_still_in_awaiting_manual_review_state
       state = load_state
-      expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+      expect(state.state_name).to eq(Pulljoy::State::AWAITING_MANUAL_REVIEW)
       expect(state.review_id).to eq(first_review_id)
     end
 
@@ -723,10 +710,10 @@ describe Pulljoy::EventHandler do
 
       describe 'when not in the awaiting_manual_review state' do
         before :each do
-          Pulljoy::EventHandler::State.create!(
-            repo: event.repository.full_name,
+          save_state(
+            repo_full_name: event.repository.full_name,
             pr_num: event.issue.number,
-            state_name: Pulljoy::EventHandler::STATE_STANDING_BY,
+            state_name: Pulljoy::State::STANDING_BY,
             commit_sha: 'head',
           )
         end
@@ -740,7 +727,7 @@ describe Pulljoy::EventHandler do
           create_event_handler.process(event)
 
           expect(comment_post_req).to have_been_requested
-          expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
+          expect(load_state.state_name).to eq(Pulljoy::State::STANDING_BY)
         end
       end
 
@@ -760,10 +747,10 @@ describe Pulljoy::EventHandler do
 
       describe 'when the wrong review ID is given' do
         before :each do
-          Pulljoy::EventHandler::State.create!(
-            repo: event.repository.full_name,
+          save_state(
+            repo_full_name: event.repository.full_name,
             pr_num: event.issue.number,
-            state_name: Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW,
+            state_name: Pulljoy::State::AWAITING_MANUAL_REVIEW,
             review_id: "not #{first_review_id}",
           )
         end
@@ -786,7 +773,7 @@ describe Pulljoy::EventHandler do
           create_event_handler.process(event)
 
           state = load_state
-          expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+          expect(state.state_name).to eq(Pulljoy::State::AWAITING_MANUAL_REVIEW)
           expect(state.review_id).to eq("not #{first_review_id}")
         end
       end
@@ -837,7 +824,7 @@ describe Pulljoy::EventHandler do
           handler.process(event)
 
           state = load_state
-          expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+          expect(state.state_name).to eq(Pulljoy::State::AWAITING_CI)
           expect(state.commit_sha).to eq('fork-commit')
         end
       end
@@ -846,10 +833,10 @@ describe Pulljoy::EventHandler do
 
   describe 'upon CI run completion' do
     def load_state
-      Pulljoy::EventHandler::State.where(
-        repo: event.repository.full_name,
-        pr_num: event.check_suite.pull_requests[0].number
-      ).first
+      @state_store.load(
+        event.repository.full_name,
+        event.check_suite.pull_requests[0].number
+      )
     end
 
     describe 'if the run is not for the latest pushed commit' do
@@ -873,10 +860,10 @@ describe Pulljoy::EventHandler do
       end
 
       before :each do
-        Pulljoy::EventHandler::State.create!(
-          repo: event.repository.full_name,
+        save_state(
+          repo_full_name: event.repository.full_name,
           pr_num: event.check_suite.pull_requests[0].number,
-          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          state_name: Pulljoy::State::AWAITING_CI,
           commit_sha: 'latest',
         )
       end
@@ -885,8 +872,9 @@ describe Pulljoy::EventHandler do
         create_event_handler.process(event)
 
         expect(@logio.string).to match(
-          /the commit for which the check suite was completed, is not the one we expect/)
-        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+          /the commit for which the check suite was completed, is not the one we expect/
+        )
+        expect(load_state.state_name).to eq(Pulljoy::State::AWAITING_CI)
       end
     end
 
@@ -914,8 +902,9 @@ describe Pulljoy::EventHandler do
         create_event_handler.process(event)
 
         expect(@logio.string).to match(
-          /Ignoring PR because it's not known by Pulljoy/)
-        expect(Pulljoy::EventHandler::State.count).to eq(0)
+          /Ignoring PR because it's not known by Pulljoy/
+        )
+        expect(@state_store.count).to eq(0)
       end
     end
 
@@ -940,10 +929,10 @@ describe Pulljoy::EventHandler do
       end
 
       before :each do
-        Pulljoy::EventHandler::State.create!(
-          repo: event.repository.full_name,
+        save_state(
+          repo_full_name: event.repository.full_name,
           pr_num: 456,
-          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          state_name: Pulljoy::State::AWAITING_CI,
           commit_sha: event.check_suite.head_sha,
         )
       end
@@ -952,11 +941,12 @@ describe Pulljoy::EventHandler do
         create_event_handler.process(event)
 
         expect(@logio.string).to match(
-          /Ignoring PR because it's not known by Pulljoy/)
-        expect(Pulljoy::EventHandler::State.count).to eq(1)
+          /Ignoring PR because it's not known by Pulljoy/
+        )
+        expect(@state_store.count).to eq(1)
 
-        state = Pulljoy::EventHandler::State.first
-        expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+        state = @state_store.first
+        expect(state.state_name).to eq(Pulljoy::State::AWAITING_CI)
       end
     end
 
@@ -981,10 +971,10 @@ describe Pulljoy::EventHandler do
       end
 
       before :each do
-        Pulljoy::EventHandler::State.create!(
-          repo: event.repository.full_name,
+        save_state(
+          repo_full_name: event.repository.full_name,
           pr_num: event.check_suite.pull_requests[0].number,
-          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          state_name: Pulljoy::State::AWAITING_CI,
           commit_sha: event.check_suite.head_sha,
         )
       end
@@ -1014,11 +1004,12 @@ describe Pulljoy::EventHandler do
         create_event_handler.process(event)
 
         expect(@logio.string).to match(
-          /Ignoring PR because not all check suites for this commit are completed/)
-        expect(Pulljoy::EventHandler::State.count).to eq(1)
+          /Ignoring PR because not all check suites for this commit are completed/
+        )
+        expect(@state_store.count).to eq(1)
 
-        state = Pulljoy::EventHandler::State.first
-        expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+        state = @state_store.first
+        expect(state.state_name).to eq(Pulljoy::State::AWAITING_CI)
 
         expect(check_suites_for_ref_req).to have_been_requested
       end
@@ -1045,10 +1036,10 @@ describe Pulljoy::EventHandler do
       end
 
       before :each do
-        Pulljoy::EventHandler::State.create!(
-          repo: event.repository.full_name,
+        save_state(
+          repo_full_name: event.repository.full_name,
           pr_num: event.check_suite.pull_requests[0].number,
-          state_name: Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW,
+          state_name: Pulljoy::State::AWAITING_MANUAL_REVIEW,
           review_id: first_review_id,
         )
       end
@@ -1057,8 +1048,9 @@ describe Pulljoy::EventHandler do
         create_event_handler.process(event)
 
         expect(@logio.string).to match(
-          /Ignoring PR because state is not #{Regexp.escape Pulljoy::EventHandler::STATE_AWAITING_CI}/)
-        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_MANUAL_REVIEW)
+          /Ignoring PR because state is not #{Regexp.escape Pulljoy::State::AWAITING_CI}/
+        )
+        expect(load_state.state_name).to eq(Pulljoy::State::AWAITING_MANUAL_REVIEW)
       end
     end
 
@@ -1083,10 +1075,10 @@ describe Pulljoy::EventHandler do
       end
 
       before :each do
-        Pulljoy::EventHandler::State.create!(
-          repo: event.repository.full_name,
+        save_state(
+          repo_full_name: event.repository.full_name,
           pr_num: event.check_suite.pull_requests[0].number,
-          state_name: Pulljoy::EventHandler::STATE_STANDING_BY,
+          state_name: Pulljoy::State::STANDING_BY,
           commit_sha: event.check_suite.head_sha,
         )
       end
@@ -1094,7 +1086,8 @@ describe Pulljoy::EventHandler do
       def stub_comment_post_req
         stub_request(
           :post,
-          "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.check_suite.pull_requests[0].number}/comments"
+          "https://api.github.com/repos/#{event.repository.full_name}" \
+            "/issues/#{event.check_suite.pull_requests[0].number}/comments"
         ).to_return(status: 200)
       end
 
@@ -1117,7 +1110,7 @@ describe Pulljoy::EventHandler do
         )
       end
 
-      def stub_check_runs_for_ref
+      def stub_check_runs_for_ref # rubocop:disable Metrics/MethodLength
         stub_request(
           :get,
           "https://api.github.com/repos/#{event.repository.full_name}" \
@@ -1147,7 +1140,8 @@ describe Pulljoy::EventHandler do
         check_suites_for_ref_req = stub_check_suites_for_ref
         check_runs_for_ref_req = stub_check_runs_for_ref
         comment_post_req = stub_comment_post_req.with(
-          body: /CI run for #{Regexp.escape event.check_suite.head_sha} complete/)
+          body: /CI run for #{Regexp.escape event.check_suite.head_sha} complete/
+        )
 
         handler = create_event_handler
         allow(handler).to receive(:delete_local_branch)
@@ -1169,7 +1163,7 @@ describe Pulljoy::EventHandler do
 
         handler.process(event)
 
-        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
+        expect(load_state.state_name).to eq(Pulljoy::State::STANDING_BY)
       end
     end
 
@@ -1194,10 +1188,10 @@ describe Pulljoy::EventHandler do
       end
 
       before :each do
-        Pulljoy::EventHandler::State.create!(
-          repo: event.repository.full_name,
+        save_state(
+          repo_full_name: event.repository.full_name,
           pr_num: event.check_suite.pull_requests[0].number,
-          state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+          state_name: Pulljoy::State::AWAITING_CI,
           commit_sha: event.check_suite.head_sha,
         )
       end
@@ -1205,7 +1199,8 @@ describe Pulljoy::EventHandler do
       def stub_comment_post_req
         stub_request(
           :post,
-          "https://api.github.com/repos/#{event.repository.full_name}/issues/#{event.check_suite.pull_requests[0].number}/comments"
+          "https://api.github.com/repos/#{event.repository.full_name}" \
+            "/issues/#{event.check_suite.pull_requests[0].number}/comments"
         ).to_return(status: 200)
       end
 
@@ -1228,7 +1223,7 @@ describe Pulljoy::EventHandler do
         )
       end
 
-      def stub_check_runs_for_ref
+      def stub_check_runs_for_ref # rubocop:disable Metrics/MethodLength
         stub_request(
           :get,
           "https://api.github.com/repos/#{event.repository.full_name}" \
@@ -1258,7 +1253,8 @@ describe Pulljoy::EventHandler do
         check_suites_for_ref_req = stub_check_suites_for_ref
         check_runs_for_ref_req = stub_check_runs_for_ref
         comment_post_req = stub_comment_post_req.with(
-          body: /CI run for #{Regexp.escape event.check_suite.head_sha} complete/)
+          body: /CI run for #{Regexp.escape event.check_suite.head_sha} complete/
+        )
 
         handler = create_event_handler
         allow(handler).to receive(:delete_local_branch)
@@ -1280,7 +1276,7 @@ describe Pulljoy::EventHandler do
 
         handler.process(event)
 
-        expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
+        expect(load_state.state_name).to eq(Pulljoy::State::STANDING_BY)
       end
 
       it 'deletes the local branch' do
@@ -1300,16 +1296,17 @@ describe Pulljoy::EventHandler do
     it 'does nothing when the branch does not exist' do
       delete_ref_req = stub_request(
         :delete,
-        "https://api.github.com/repos/foo/foo/git/refs/heads/pulljoy/123"
-      ).to_return(status: 422,
+        'https://api.github.com/repos/foo/foo/git/refs/heads/pulljoy/123'
+      ).to_return(
+        status: 422,
         headers: { 'Content-Type' => 'application/json' },
         body: JSON.generate(
-          message: "Reference does not exist"
+          message: 'Reference does not exist'
         )
       )
 
       handler = create_event_handler
-      expect(handler).to receive(:local_branch_name).at_least(:once).and_return("pulljoy/123")
+      expect(handler).to receive(:local_branch_name).at_least(:once).and_return('pulljoy/123')
       handler.send(:delete_local_branch, 'foo/foo')
 
       expect(delete_ref_req).to have_been_requested
@@ -1318,16 +1315,17 @@ describe Pulljoy::EventHandler do
     it 'raises the API error if the error is not related to the branch not existing' do
       delete_ref_req = stub_request(
         :delete,
-        "https://api.github.com/repos/foo/foo/git/refs/heads/pulljoy/123"
-      ).to_return(status: 422,
+        'https://api.github.com/repos/foo/foo/git/refs/heads/pulljoy/123'
+      ).to_return(
+        status: 422,
         headers: { 'Content-Type' => 'application/json' },
         body: JSON.generate(
-          message: "Something went wrong"
+          message: 'Something went wrong'
         )
       )
 
       handler = create_event_handler
-      expect(handler).to receive(:local_branch_name).at_least(:once).and_return("pulljoy/123")
+      expect(handler).to receive(:local_branch_name).at_least(:once).and_return('pulljoy/123')
       expect { handler.send(:delete_local_branch, 'foo/foo') }.to \
         raise_error(Octokit::UnprocessableEntity, /Something went wrong/)
 
@@ -1337,10 +1335,10 @@ describe Pulljoy::EventHandler do
 
   describe 'when cancelling a CI run' do
     before :each do
-      Pulljoy::EventHandler::State.create!(
-        repo: close_pr_event.repository.full_name,
+      save_state(
+        repo_full_name: close_pr_event.repository.full_name,
         pr_num: close_pr_event.pull_request.number,
-        state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+        state_name: Pulljoy::State::AWAITING_CI,
         commit_sha: local_branch_sha,
       )
     end

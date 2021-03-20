@@ -83,24 +83,18 @@ module Pulljoy
       end
 
       # @param config [Config]
-      def establish_db_connection(config, logger)
-        require 'active_record'
-        require 'composite_primary_keys'
-
-        db_config = config.database
-        ActiveRecord::Base.configurations = { 'default' => db_config }
-        ActiveRecord::Base.establish_connection(db_config)
-        ActiveRecord::Tasks::DatabaseTasks.database_configuration = db_config
-        ActiveRecord::Tasks::DatabaseTasks.db_dir = 'db'
-
-        case config.log_format
-        when 'human'
-          ActiveRecord::Base.logger = logger
-        when 'json'
-          require_relative 'json_logging/active_record_log_subscriber'
-
-          log_subscriber = JSONLogging::ActiveRecordLogSubscriber.new(logger)
-          JSONLogging::ActiveRecordLogSubscriber.attach_to(:active_record, log_subscriber)
+      def create_state_store(config)
+        case config.state_store_type
+        when 'google_fire_store'
+          require_relative 'state_store/google_fire_store'
+          require_relative 'state_store/google_fire_store_config'
+          if !config.state_store_config.is_a?(StateStore::GoogleFireStoreConfig)
+            abort 'Configuration error: state_store_config must be a valid Google FireStore configuration block'
+          end
+          StateStore::GoogleFireStore.new(config.state_store_config)
+        when 'memory'
+          require_relative 'state_store/memory_store'
+          StateStore::MemoryStore.new
         end
       end
 

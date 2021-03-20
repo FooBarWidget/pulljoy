@@ -10,10 +10,11 @@ octokit = Pulljoy::Boot.create_octokit(config)
 
 Pulljoy::WebApp.set :environment, ENV['RACK_ENV']
 Pulljoy::WebApp.activate_pulljoy_config(config)
-Pulljoy::Boot.establish_db_connection(config, logger)
+Pulljoy::Boot.create_state_store(config)
 
 run Pulljoy::WebApp.new(
   my_github_username: Pulljoy::Boot.infer_github_username(octokit),
   octokit: octokit,
   logger: logger,
+  state_store: state_store,
 )

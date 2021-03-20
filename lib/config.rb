@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'dry-struct'
+require_relative 'state_store/google_fire_store_config'
 require_relative 'utils'
 
 module Pulljoy
@@ -22,6 +23,10 @@ module Pulljoy
     attribute :github_access_token, Types::Coercible::String
     attribute :github_webhook_secret, Types::Coercible::String
 
-    attribute :database, Types::Coercible::Hash
+    attribute :state_store_type, Types::Coercible::String
+      .enum('google_fire_store', 'memory')
+    attribute? :state_store_config,
+               StateStore::GoogleFireStoreConfig |
+               Types::Strict::Nil
   end
 end

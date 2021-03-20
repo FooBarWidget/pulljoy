@@ -11,6 +11,6 @@ module Pulljoy
   config_source = Boot.infer_config_source!
   CONFIG = Boot.load_config!(config_source)
   LOGGER = Boot.create_logger(CONFIG)
-  Boot.establish_db_connection(CONFIG, LOGGER)
+  STATE_STORE = Boot.create_state_store(CONFIG)
   pry # rubocop:disable Lint/Debugger
 end

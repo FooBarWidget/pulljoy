@@ -2,19 +2,14 @@
 
 require 'securerandom'
 require 'dry-struct'
-require 'active_record'
-require 'composite_primary_keys'
 require_relative 'github_api_types'
+require_relative 'state'
 require_relative 'command_parser'
 require_relative 'utils'
 
 module Pulljoy
   class EventHandler
     SELFDIR = File.absolute_path(File.dirname(__FILE__))
-
-    STATE_AWAITING_MANUAL_REVIEW = 'awaiting_manual_review'
-    STATE_AWAITING_CI = 'awaiting_ci'
-    STATE_STANDING_BY = 'standing_by'
 
     class Context < Dry::Struct
       attribute :repo_full_name, Types::Strict::String
@@ -23,42 +18,17 @@ module Pulljoy
       attribute? :event_source_comment_id, Types::Strict::Integer.optional
     end
 
-    class State < ActiveRecord::Base
-      self.primary_keys = [:repo, :pr_num]
-
-      validates :review_id, presence: true, if: :state_is_awaiting_manual_review?
-      validates :review_id, absence: true, if: :state_not_awaiting_manual_review?
-      validates :commit_sha, presence: true, if: :state_is_awaiting_ci_or_standing_by?
-      validates :commit_sha, absence: true, if: :state_not_awaiting_ci_or_standing_by?
-
-      def state_is_awaiting_manual_review?
-        state_name == EventHandler::STATE_AWAITING_MANUAL_REVIEW
-      end
-
-      def state_not_awaiting_manual_review?
-        state_name != EventHandler::STATE_AWAITING_MANUAL_REVIEW
-      end
-
-      def state_is_awaiting_ci_or_standing_by?
-        state_name == EventHandler::STATE_AWAITING_CI ||
-          state_name == EventHandler::STATE_STANDING_BY
-      end
-
-      def state_not_awaiting_ci_or_standing_by?
-        state_name != EventHandler::STATE_AWAITING_CI &&
-          state_name != EventHandler::STATE_STANDING_BY
-      end
-    end
-
 
     # @param config [Config]
     # @param octokit [Octokit::Client]
     # @param my_username [String]
-    def initialize(config:, octokit:, logger:, my_username:)
+    # @param state_store [Pulljoy::StateStore::Base]
+    def initialize(config:, octokit:, logger:, my_username:, state_store:)
       @config = config
       @octokit = octokit
       @logger = logger
       @my_username = my_username
+      @state_store = state_store
     end
 
     # @param event [PullRequestEvent, IssueCommentEvent]
@@ -137,7 +107,7 @@ module Pulljoy
       log_debug("Processing 'synchronize' action")
       return if !load_state
 
-      if @state.state_name == STATE_AWAITING_CI
+      if @state.state_name == State::AWAITING_CI
         cancel_ci_run
         delete_local_branch(event.repository.full_name)
       end
@@ -150,7 +120,7 @@ module Pulljoy
       log_debug("Processing 'closed' action")
       return if !load_state
 
-      if @state.state_name == STATE_AWAITING_CI
+      if @state.state_name == State::AWAITING_CI
         cancel_ci_run
         delete_local_branch(event.repository.full_name)
       end
@@ -204,7 +174,7 @@ module Pulljoy
     # @param command [ApproveCommand]
     # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
     def process_approve_command(event, command)
-      if !load_state || @state.state_name != STATE_AWAITING_MANUAL_REVIEW
+      if !load_state || @state.state_name != State::AWAITING_MANUAL_REVIEW
         post_comment("Sorry @#{@context.event_source_author}, there's no review request awaiting approval.")
         return
       end
@@ -222,7 +192,7 @@ module Pulljoy
           pr.head.sha
         )
         save_state(
-          state_name: STATE_AWAITING_CI,
+          state_name: State::AWAITING_CI,
           commit_sha: pr.head.sha,
         )
       else
@@ -255,7 +225,7 @@ module Pulljoy
         ' If you deem it safe, post the following comment:' \
         " `#{COMMAND_PREFIX} approve #{review_id}`")
       save_state(
-        state_name: STATE_AWAITING_MANUAL_REVIEW,
+        state_name: State::AWAITING_MANUAL_REVIEW,
         review_id: review_id
       )
     end
@@ -275,8 +245,8 @@ module Pulljoy
         return
       end
 
-      if @state.state_name != STATE_AWAITING_CI && @state.state_name != STATE_STANDING_BY
-        log_debug("Ignoring PR because state is not #{STATE_AWAITING_CI}", state: @state.state_name)
+      if @state.state_name != State::AWAITING_CI && @state.state_name != State::STANDING_BY
+        log_debug("Ignoring PR because state is not #{State::AWAITING_CI}", state: @state.state_name)
         return
       end
 
@@ -292,7 +262,7 @@ module Pulljoy
       check_suites =
         @octokit
         .check_suites_for_ref(event.repository.full_name, event.check_suite.head_sha,
-          accept: 'application/vnd.github.antiope-preview+json')
+                              accept: 'application/vnd.github.antiope-preview+json')
         .check_suites
       if !all_check_suites_completed?(check_suites)
         log_debug('Ignoring PR because not all check suites for this commit are completed')
@@ -302,14 +272,14 @@ module Pulljoy
       check_runs =
         @octokit
         .check_runs_for_ref(event.repository.full_name, event.check_suite.head_sha,
-          accept: 'application/vnd.github.antiope-preview+json')
+                            accept: 'application/vnd.github.antiope-preview+json')
         .check_runs
 
       overall_conclusion = get_overall_check_suites_conclusion(check_suites)
       short_sha = Pulljoy.shorten_commit_sha(event.check_suite.head_sha)
       delete_local_branch(event.repository.full_name)
       save_state(
-        state_name: STATE_STANDING_BY,
+        state_name: State::STANDING_BY,
         commit_sha: @state.commit_sha,
       )
       post_comment("CI run for #{short_sha} completed.\n\n" \
@@ -362,7 +332,7 @@ module Pulljoy
     end
 
     def cancel_ci_run
-      run_id = find_github_actions_run_id_for_ref(@state.repo, @state.commit_sha)
+      run_id = find_github_actions_run_id_for_ref(@state.repo_full_name, @state.commit_sha)
 
       if run_id.nil?
         log_debug(
@@ -442,39 +412,34 @@ module Pulljoy
     #
     # @return [Boolean] Whether state was found.
     def load_state
-      @state = State.where(
-        repo: @context.repo_full_name,
-        pr_num: @context.pr_num
-      ).first
+      @state = @state_store.load(@context.repo_full_name, @context.pr_num)
       if @state.nil?
         log_debug('No state found')
         false
       else
-        log_debug('Loaded state', state: @state.attributes)
+        log_debug('Loaded state', state: @state.to_hash)
         true
       end
     end
 
     # Saves new state for the current pull request.
+    # If there already existed state, then that state is overwritten;
+    # no merging of state contents occur.
     #
-    # @param props [Hash] All state properties to save. Any properties not listed here will be cleared.
+    # @param props [Hash]
     def save_state(props)
-      if @state || load_state
-        Pulljoy.clear_secondary_attributes(@state)
-        @state.attributes = props
-        @state.save!
-      else
-        @state = State.create!(
-          props.merge!(
-            repo: @context.repo_full_name,
-            pr_num: @context.pr_num,
-          )
+      @state = State.new(
+        props.merge(
+          repo_full_name: @context.repo_full_name,
+          pr_num: @context.pr_num,
         )
-      end
+      )
+      @state.validate!
+      @state_store.save(@context.repo_full_name, @context.pr_num, @state)
     end
 
     def reset_state
-      @state.destroy!
+      @state_store.delete(@context.repo_full_name, @context.pr_num)
     end
 
     # @return [String]

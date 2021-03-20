@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require 'json'
-require 'active_record'
 require 'sinatra'
 require 'sinatra/json'
 require 'sinatra/github_webhooks'
@@ -20,6 +19,7 @@ module Pulljoy
       @my_github_username = read_option(options, :my_github_username)
       @octokit = read_option(options, :octokit)
       @logger_template = read_option(options, :logger)
+      @state_store = read_option(options, :state_store)
     end
 
     configure do
@@ -35,6 +35,7 @@ module Pulljoy
           octokit: @octokit,
           logger: @logger,
           my_username: @my_github_username,
+          state_store: @state_store,
         )
       end
     end
@@ -56,7 +57,7 @@ module Pulljoy
         'Request complete',
         status: response.status
       )
-      ActiveRecord::Base.clear_active_connections!
+      @state_store.release_thread_local_connection
     end
 
     error do
