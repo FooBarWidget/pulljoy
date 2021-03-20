@@ -31,7 +31,7 @@ module Pulljoy
       @state_store = state_store
     end
 
-    # @param event [PullRequestEvent, IssueCommentEvent]
+    # @param event [GithubEvent]
     # rubocop:disable Metrics/AbcSize, Metrics/CyclomaticComplexity, Metrics/MethodLength
     def process(event)
       case event

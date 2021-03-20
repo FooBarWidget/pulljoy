@@ -31,13 +31,15 @@ module Pulljoy
     attribute :base, PullRequestRepositoryReference
   end
 
-  class PullRequestEvent < Dry::Struct
+  class GithubEvent < Dry::Struct
+    transform_keys(&:to_sym)
+  end
+
+  class PullRequestEvent < GithubEvent
     ACTION_OPENED = 'opened'
     ACTION_CLOSED = 'closed'
     ACTION_SYNCHRONIZE = 'synchronize'
     ACTION_REOPENED = 'reopened'
-
-    transform_keys(&:to_sym)
 
     attribute :action, Types::Strict::String
     attribute :repository, Repository
@@ -45,11 +47,9 @@ module Pulljoy
     attribute :pull_request, PullRequest
   end
 
-  class IssueCommentEvent < Dry::Struct
+  class IssueCommentEvent < GithubEvent
     # Possible values for 'action'
     ACTION_CREATED = 'created'
-
-    transform_keys(&:to_sym)
 
     attribute :action, Types::Strict::String
     attribute :repository, Repository
@@ -63,13 +63,11 @@ module Pulljoy
     end
   end
 
-  class CheckSuiteEvent < Dry::Struct
+  class CheckSuiteEvent < GithubEvent
     ACTION_COMPLETED = 'completed'
     STATUS_COMPLETED = 'completed'
     STATUS_QUEUED    = 'queued'
     CONCLUSION_SUCCESS = 'success'
-
-    transform_keys(&:to_sym)
 
     attribute :action, Types::Strict::String
     attribute :repository, Repository
