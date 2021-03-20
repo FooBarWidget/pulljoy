@@ -1,6 +1,6 @@
 AllCops:
+  SuggestExtensions: false
   Exclude:
-    - db/schema.rb
     - vendor/**/*
 Style/StderrPuts:
   Enabled: false
