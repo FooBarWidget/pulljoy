@@ -1297,13 +1297,149 @@ describe Pulljoy::EventHandler do
   end
 
   describe 'when deleting a local branch' do
-    it 'does nothing when the branch does not exist'
-    it 'raises the API error if the error is not related to the branch not existing'
+    it 'does nothing when the branch does not exist' do
+      delete_ref_req = stub_request(
+        :delete,
+        "https://api.github.com/repos/foo/foo/git/refs/heads/pulljoy/123"
+      ).to_return(status: 422,
+        headers: { 'Content-Type' => 'application/json' },
+        body: JSON.generate(
+          message: "Reference does not exist"
+        )
+      )
+
+      handler = create_event_handler
+      expect(handler).to receive(:local_branch_name).at_least(:once).and_return("pulljoy/123")
+      handler.send(:delete_local_branch, 'foo/foo')
+
+      expect(delete_ref_req).to have_been_requested
+    end
+
+    it 'raises the API error if the error is not related to the branch not existing' do
+      delete_ref_req = stub_request(
+        :delete,
+        "https://api.github.com/repos/foo/foo/git/refs/heads/pulljoy/123"
+      ).to_return(status: 422,
+        headers: { 'Content-Type' => 'application/json' },
+        body: JSON.generate(
+          message: "Something went wrong"
+        )
+      )
+
+      handler = create_event_handler
+      expect(handler).to receive(:local_branch_name).at_least(:once).and_return("pulljoy/123")
+      expect { handler.send(:delete_local_branch, 'foo/foo') }.to \
+        raise_error(Octokit::UnprocessableEntity, /Something went wrong/)
+
+      expect(delete_ref_req).to have_been_requested
+    end
   end
 
-  describe 'when canceling a CI run' do
-    it 'finds the run in the run in queued workflow runs'
-    it 'finds the run in the run in in-progress workflow runs'
-    it 'does nothing when there is no CI run'
+  describe 'when cancelling a CI run' do
+    before :each do
+      Pulljoy::EventHandler::State.create!(
+        repo: close_pr_event.repository.full_name,
+        pr_num: close_pr_event.pull_request.number,
+        state_name: Pulljoy::EventHandler::STATE_AWAITING_CI,
+        commit_sha: local_branch_sha,
+      )
+    end
+
+    let(:close_pr_event) do
+      Pulljoy::PullRequestEvent.new(
+        action: Pulljoy::PullRequestEvent::ACTION_CLOSED,
+        repository: {
+          full_name: 'test/test'
+        },
+        user: {
+          login: 'pulljoy'
+        },
+        pull_request: {
+          number: 123,
+          head: {
+            sha: 'head',
+            repo: {
+              full_name: 'fork/test',
+            }
+          },
+          base: {
+            sha: 'base',
+            repo: {
+              full_name: 'test/test'
+            }
+          }
+        }
+      )
+    end
+
+    let(:local_branch_sha) { 'local' }
+
+    def stub_query_runs_req(status, result_workflow_run_id, result_commit_sha)
+      stub_request(
+        :get,
+        "https://api.github.com/repos/#{close_pr_event.repository.full_name}/actions/runs?status=#{status}"
+      ).to_return(
+        status: 200,
+        headers: { 'Content-Type' => 'application/json' },
+        body: JSON.generate(
+          total_count: 1,
+          workflow_runs: [
+            {
+              id: result_workflow_run_id,
+              head_sha: result_commit_sha
+            }
+          ]
+        )
+      )
+    end
+
+    def stub_cancel_run_req(workflow_run_id)
+      stub_request(
+        :post,
+        "https://api.github.com/repos/#{close_pr_event.repository.full_name}" \
+          "/actions/runs/#{workflow_run_id}/cancel"
+      ).to_return(status: 200)
+    end
+
+    def stub_delete_branch_req
+      stub_request(
+        :delete,
+        "https://api.github.com/repos/#{close_pr_event.repository.full_name}" \
+          "/git/refs/heads/pulljoy/#{close_pr_event.pull_request.number}"
+      ).to_return(status: 200)
+    end
+
+    it 'finds the run in the run in queued workflow runs' do
+      query_runs_req = stub_query_runs_req(:queued, 123, local_branch_sha)
+      stub_cancel_run_req(123)
+      stub_delete_branch_req
+
+      create_event_handler.process(close_pr_event)
+
+      expect(query_runs_req).to have_been_requested
+    end
+
+    it 'finds the run in the run in in-progress workflow runs' do
+      query_runs_req1 = stub_query_runs_req(:queued, 123, "not #{local_branch_sha}")
+      query_runs_req2 = stub_query_runs_req(:in_progress, 124, local_branch_sha)
+      stub_cancel_run_req(124)
+      stub_delete_branch_req
+
+      create_event_handler.process(close_pr_event)
+
+      expect(query_runs_req1).to have_been_requested
+      expect(query_runs_req2).to have_been_requested
+    end
+
+    it 'cancels nothing when there is no CI run' do
+      query_runs_req1 = stub_query_runs_req(:queued, 123, "not #{local_branch_sha}")
+      query_runs_req2 = stub_query_runs_req(:in_progress, 124, "still not #{local_branch_sha}")
+      stub_delete_branch_req
+
+      create_event_handler.process(close_pr_event)
+
+      expect(query_runs_req1).to have_been_requested
+      expect(query_runs_req2).to have_been_requested
+    end
   end
 end
