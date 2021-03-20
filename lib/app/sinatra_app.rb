@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'json'
 require 'sinatra'
 require 'sinatra/json'
 require 'sinatra/github_webhooks'
@@ -69,16 +68,9 @@ module Pulljoy
     post '/receive_github_event' do
       @logger.info("Github event type: #{github_event}")
 
-      case github_event
-      when 'pull_request'
-        event = PullRequestEvent.new(payload)
-      when 'issue_comment'
-        event = IssueCommentEvent.new(payload)
-      when 'check_suite'
-        event = CheckSuiteEvent.new(payload)
-      when 'ping'
-        return json(processed: true)
-      end
+      return json(processed: true) if github_event == 'ping'
+
+      event = Pulljoy.parse_github_event_data(github_event, payload)
 
       if event
         event_handler = @event_handler_factory.create

@@ -79,5 +79,19 @@ module Pulljoy
         attribute :number, Types::Strict::Integer
       end
     end
+
+
+  # @param event_type [String]
+  # @param doc [Hash]
+  # @return [GithubEvent, nil]
+  def self.parse_github_event_data(event_type, doc)
+    case event_type
+    when 'pull_request'
+      PullRequestEvent.new(doc)
+    when 'issue_comment'
+      IssueCommentEvent.new(doc)
+    when 'check_suite'
+      CheckSuiteEvent.new(doc)
+    end
   end
 end
