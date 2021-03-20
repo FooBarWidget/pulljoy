@@ -115,6 +115,8 @@ GEM
     rack-github_webhooks (0.4.0)
     rack-protection (2.1.0)
       rack
+    rack-test (1.1.0)
+      rack (>= 1.0, < 3)
     rainbow (3.0.0)
     rbtree (0.4.4)
     regexp_parser (2.1.1)
@@ -190,6 +192,7 @@ DEPENDENCIES
   ougai
   pry
   puma
+  rack-test
   rspec
   rubocop
   sinatra

@@ -16,8 +16,7 @@ module Pulljoy
 
     def initialize(options)
       super()
-      @my_github_username = read_option(options, :my_github_username)
-      @octokit = read_option(options, :octokit)
+      @event_handler_factory = read_option(options, :event_handler_factory)
       @logger_template = read_option(options, :logger)
       @state_store = read_option(options, :state_store)
     end
@@ -27,18 +26,6 @@ module Pulljoy
     end
 
     helpers Sinatra::GithubWebhooks
-
-    helpers do
-      def create_event_handler
-        EventHandler.new(
-          config: settings.pulljoy_config,
-          octokit: @octokit,
-          logger: @logger,
-          my_username: @my_github_username,
-          state_store: @state_store,
-        )
-      end
-    end
 
     before do
       @logger = @logger_template.child(
@@ -79,12 +66,12 @@ module Pulljoy
       'pong'
     end
 
-    post '/process' do
+    post '/receive_github_event' do
       @logger.info("Github event type: #{github_event}")
 
       case github_event
       when 'pull_request'
-        event = PullRequestEvent(payload)
+        event = PullRequestEvent.new(payload)
       when 'issue_comment'
         event = IssueCommentEvent.new(payload)
       when 'check_suite'
@@ -94,7 +81,8 @@ module Pulljoy
       end
 
       if event
-        create_event_handler.process(event)
+        event_handler = @event_handler_factory.create
+        event_handler.process(event)
         json(processed: true)
       else
         @logger.error "Unsupported event type #{github_event.inspect}"
