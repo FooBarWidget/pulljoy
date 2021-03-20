@@ -28,8 +28,8 @@ module Pulljoy
 
       validates :review_id, presence: true, if: :state_is_awaiting_manual_review?
       validates :review_id, absence: true, if: :state_not_awaiting_manual_review?
-      validates :commit_sha, presence: true, if: :state_is_awaiting_ci?
-      validates :commit_sha, absence: true, if: :state_not_awaiting_ci?
+      validates :commit_sha, presence: true, if: :state_is_awaiting_ci_or_standing_by?
+      validates :commit_sha, absence: true, if: :state_not_awaiting_ci_or_standing_by?
 
       def state_is_awaiting_manual_review?
         state_name == EventHandler::STATE_AWAITING_MANUAL_REVIEW
@@ -39,12 +39,14 @@ module Pulljoy
         state_name != EventHandler::STATE_AWAITING_MANUAL_REVIEW
       end
 
-      def state_is_awaiting_ci?
-        state_name == EventHandler::STATE_AWAITING_CI
+      def state_is_awaiting_ci_or_standing_by?
+        state_name == EventHandler::STATE_AWAITING_CI ||
+          state_name == EventHandler::STATE_STANDING_BY
       end
 
-      def state_not_awaiting_ci?
-        state_name != EventHandler::STATE_AWAITING_CI
+      def state_not_awaiting_ci_or_standing_by?
+        state_name != EventHandler::STATE_AWAITING_CI &&
+          state_name != EventHandler::STATE_STANDING_BY
       end
     end
 
@@ -202,11 +204,8 @@ module Pulljoy
     # @param command [ApproveCommand]
     # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
     def process_approve_command(event, command)
-      return if !load_state
-
-      if @state.state_name != STATE_AWAITING_MANUAL_REVIEW
-        todo('we need to respond here, not just log')
-        log_debug("Ignoring command: currently not in #{STATE_AWAITING_MANUAL_REVIEW} state")
+      if !load_state || @state.state_name != STATE_AWAITING_MANUAL_REVIEW
+        post_comment("Sorry @#{@context.event_source_author}, there's no review request awaiting approval.")
         return
       end
 
@@ -276,7 +275,7 @@ module Pulljoy
         return
       end
 
-      if @state.state_name != STATE_AWAITING_CI
+      if @state.state_name != STATE_AWAITING_CI && @state.state_name != STATE_STANDING_BY
         log_debug("Ignoring PR because state is not #{STATE_AWAITING_CI}", state: @state.state_name)
         return
       end
@@ -292,7 +291,8 @@ module Pulljoy
 
       check_suites =
         @octokit
-        .check_suites_for_ref(event.repository.full_name, event.check_suite.head_sha)
+        .check_suites_for_ref(event.repository.full_name, event.check_suite.head_sha,
+          accept: 'application/vnd.github.antiope-preview+json')
         .check_suites
       if !all_check_suites_completed?(check_suites)
         log_debug('Ignoring PR because not all check suites for this commit are completed')
@@ -301,12 +301,17 @@ module Pulljoy
 
       check_runs =
         @octokit
-        .check_runs_for_ref(event.repository.full_name, event.check_suite.head_sha)
+        .check_runs_for_ref(event.repository.full_name, event.check_suite.head_sha,
+          accept: 'application/vnd.github.antiope-preview+json')
         .check_runs
 
       overall_conclusion = get_overall_check_suites_conclusion(check_suites)
       short_sha = Pulljoy.shorten_commit_sha(event.check_suite.head_sha)
       delete_local_branch(event.repository.full_name)
+      save_state(
+        state_name: STATE_STANDING_BY,
+        commit_sha: @state.commit_sha,
+      )
       post_comment("CI run for #{short_sha} completed.\n\n" \
         " * Conclusion: #{overall_conclusion}\n" +
         render_check_run_conclusions_markdown_list(check_runs))

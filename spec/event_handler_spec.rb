@@ -727,28 +727,33 @@ describe Pulljoy::EventHandler do
             repo: event.repository.full_name,
             pr_num: event.issue.number,
             state_name: Pulljoy::EventHandler::STATE_STANDING_BY,
+            commit_sha: 'head',
           )
         end
 
-        it 'ignores the message' do
-          pending
-
+        it 'refuses the command' do
           stub_collaborator_permission_req('write')
+          comment_post_req = stub_comment_post_req.with(
+            body: /Sorry .*?, there's no review request awaiting approval/
+          )
+
           create_event_handler.process(event)
 
-          expect(@logio.string).to match(/Ignoring command: currently not in .*? state/)
-
-          state = load_state
-          expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
+          expect(comment_post_req).to have_been_requested
+          expect(load_state.state_name).to eq(Pulljoy::EventHandler::STATE_STANDING_BY)
         end
       end
 
       describe 'when no state is available for the current pull request' do
-        it 'ignores the message' do
+        it 'refuses the command' do
           stub_collaborator_permission_req('write')
+          comment_post_req = stub_comment_post_req.with(
+            body: /Sorry .*?, there's no review request awaiting approval/
+          )
+
           create_event_handler.process(event)
 
-          expect(@logio.string).to include('No state found')
+          expect(comment_post_req).to have_been_requested
           expect(load_state).to be_nil
         end
       end
@@ -984,8 +989,27 @@ describe Pulljoy::EventHandler do
         )
       end
 
+      def stub_check_suites_for_ref
+        stub_request(
+          :get,
+          "https://api.github.com/repos/#{event.repository.full_name}" \
+            "/commits/#{event.check_suite.head_sha}/check-suites"
+        ).to_return(
+          status: 200,
+          headers: { 'Content-Type' => 'application/json' },
+          body: JSON.generate(
+            total_count: 1,
+            check_suites: [
+              {
+                status: 'in_progress'
+              }
+            ]
+          )
+        )
+      end
+
       it 'ignores the event' do
-        pending
+        check_suites_for_ref_req = stub_check_suites_for_ref
 
         create_event_handler.process(event)
 
@@ -995,6 +1019,8 @@ describe Pulljoy::EventHandler do
 
         state = Pulljoy::EventHandler::State.first
         expect(state.state_name).to eq(Pulljoy::EventHandler::STATE_AWAITING_CI)
+
+        expect(check_suites_for_ref_req).to have_been_requested
       end
     end
 
@@ -1061,6 +1087,7 @@ describe Pulljoy::EventHandler do
           repo: event.repository.full_name,
           pr_num: event.check_suite.pull_requests[0].number,
           state_name: Pulljoy::EventHandler::STATE_STANDING_BY,
+          commit_sha: event.check_suite.head_sha,
         )
       end
 
@@ -1117,10 +1144,8 @@ describe Pulljoy::EventHandler do
       end
 
       it 're-reports the result' do
-        pending
-
-        stub_check_suites_for_ref
-        stub_check_runs_for_ref
+        check_suites_for_ref_req = stub_check_suites_for_ref
+        check_runs_for_ref_req = stub_check_runs_for_ref
         comment_post_req = stub_comment_post_req.with(
           body: /CI run for #{Regexp.escape event.check_suite.head_sha} complete/)
 
@@ -1129,6 +1154,8 @@ describe Pulljoy::EventHandler do
 
         handler.process(event)
 
+        expect(check_suites_for_ref_req).to have_been_requested
+        expect(check_runs_for_ref_req).to have_been_requested
         expect(comment_post_req).to have_been_requested
       end
 
@@ -1244,8 +1271,6 @@ describe Pulljoy::EventHandler do
       end
 
       it 'transitions to the standing_by state' do
-        pending
-
         stub_check_suites_for_ref
         stub_check_runs_for_ref
         stub_comment_post_req
