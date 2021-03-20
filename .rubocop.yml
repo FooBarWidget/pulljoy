@@ -95,3 +95,5 @@ Style/IfWithBooleanLiteralBranches: # (new in 1.9)
   Enabled: true
 Style/RedundantArgument: # (new in 1.4)
   Enabled: true
+Style/StringChars: # (new in 1.12)
+  Enabled: true
