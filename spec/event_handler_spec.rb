@@ -485,36 +485,103 @@ describe Pulljoy::EventHandler do
     end
 
     describe 'when the sender does not have write access to the repo' do
-      let(:event) do
-        Pulljoy::IssueCommentEvent.new(
-          action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
-          repository: {
-            full_name: 'test/test'
-          },
-          issue: {
-            number: 123,
-          },
-          comment: {
-            id: 456,
-            body: 'hi',
-            user: {
-              login: 'someone'
+      describe 'and the comment contains a command' do
+        let(:event) do
+          Pulljoy::IssueCommentEvent.new(
+            action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+            repository: {
+              full_name: 'test/test'
+            },
+            issue: {
+              number: 123,
+            },
+            comment: {
+              id: 456,
+              body: "#{Pulljoy::COMMAND_PREFIX} approve 123",
+              user: {
+                login: 'someone'
+              }
             }
-          }
-        )
+          )
+        end
+
+        it 'responds with a refusal' do
+          permission_req = stub_collaborator_permission_req('read')
+          comment_post_req = stub_comment_post_req.with(
+            body: /Sorry @#{Regexp.escape event.comment.user.login}: You're not authorized/
+          )
+
+          initialize_with_awaiting_manual_review_state
+          create_event_handler.process(event)
+
+          expect(permission_req).to have_been_requested
+          expect(comment_post_req).to have_been_requested
+          assert_still_in_awaiting_manual_review_state
+        end
       end
 
-      it 'ignores the message' do
-        pending
+      describe 'and the comment contains no command' do
+        let(:event) do
+          Pulljoy::IssueCommentEvent.new(
+            action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+            repository: {
+              full_name: 'test/test'
+            },
+            issue: {
+              number: 123,
+            },
+            comment: {
+              id: 456,
+              body: 'hi',
+              user: {
+                login: 'someone'
+              }
+            }
+          )
+        end
 
-        permission_req = stub_collaborator_permission_req('read')
+        it 'ignores the message' do
+          initialize_with_awaiting_manual_review_state
+          create_event_handler.process(event)
 
-        initialize_with_awaiting_manual_review_state
-        create_event_handler.process(event)
+          expect(@logio.string).to include('Ignoring comment: no command found')
+          assert_still_in_awaiting_manual_review_state
+        end
+      end
 
-        expect(permission_req).to have_been_requested
-        expect(@logio.string).to include('Ignoring comment: user not authorized to send commands')
-        assert_still_in_awaiting_manual_review_state
+      describe 'and the comment contains an invalid command' do
+        let(:event) do
+          Pulljoy::IssueCommentEvent.new(
+            action: Pulljoy::IssueCommentEvent::ACTION_CREATED,
+            repository: {
+              full_name: 'test/test'
+            },
+            issue: {
+              number: 123,
+            },
+            comment: {
+              id: 456,
+              body: "#{Pulljoy::COMMAND_PREFIX} foo",
+              user: {
+                login: 'someone'
+              }
+            }
+          )
+        end
+
+        it 'ignores the message' do
+          permission_req = stub_collaborator_permission_req('read')
+          comment_post_req = stub_comment_post_req.with(
+            body: /Sorry @#{Regexp.escape event.comment.user.login}: You're not authorized/
+          )
+
+          initialize_with_awaiting_manual_review_state
+          create_event_handler.process(event)
+
+          expect(permission_req).to have_been_requested
+          expect(comment_post_req).to have_been_requested
+          assert_still_in_awaiting_manual_review_state
+        end
       end
     end
 

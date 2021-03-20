@@ -165,16 +165,15 @@ module Pulljoy
         log_debug('Ignoring comment by myself')
         return
       end
-      if !user_authorized?(@context.repo_full_name, @context.event_source_author)
-        todo('we need to respond here, not just log')
-        log_debug('Ignoring comment: user not authorized to send commands', username: @context.event_source_author)
-        return
-      end
 
       begin
         command = Pulljoy.parse_command(event.comment.body)
       rescue UnsupportedCommandType, CommandSyntaxError => e
-        post_comment("Sorry @#{@context.event_source_author}: #{e}")
+        if user_authorized?(@context.repo_full_name, @context.event_source_author)
+          post_comment("Sorry @#{@context.event_source_author}: #{e}")
+        else
+          post_comment_command_refusal(@context.event_source_author)
+        end
         return
       end
 
@@ -184,6 +183,11 @@ module Pulljoy
       end
 
       log_debug('Command parsed', command_type: command.class.to_s)
+
+      if !user_authorized?(@context.repo_full_name, @context.event_source_author)
+        post_comment_command_refusal(@context.event_source_author)
+        return
+      end
 
       case command
       when ApproveCommand
@@ -506,6 +510,12 @@ module Pulljoy
         @context.pr_num,
         message
       )
+    end
+
+    # @param recipient [String]
+    def post_comment_command_refusal(recipient)
+      post_comment("Sorry @#{recipient}: You're not authorized to send me commands." \
+        " That's because you don't have write access to this repo.")
     end
 
     # @param username [String]
