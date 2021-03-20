@@ -4,8 +4,8 @@ require 'json'
 require 'sinatra'
 require 'sinatra/json'
 require 'sinatra/github_webhooks'
-require_relative 'event_handler'
-require_relative 'github_api_types'
+require_relative '../event_handler'
+require_relative '../github_api_types'
 
 module Pulljoy
   class WebApp < Sinatra::Base

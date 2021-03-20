@@ -2,7 +2,7 @@
 
 require './lib/boot'
 require './lib/factory'
-require './lib/web_app'
+require './lib/app/sinatra_app'
 
 config_source = Pulljoy::Boot.infer_config_source!
 config = Pulljoy::Boot.load_config!(config_source)
