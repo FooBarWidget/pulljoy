@@ -2,6 +2,7 @@
 
 require_relative 'spec_helper'
 require 'json'
+require 'ougai'
 require 'functions_framework/testing'
 require 'active_support/core_ext/hash/keys'
 require_relative 'github_webhook_helper'
@@ -38,12 +39,19 @@ describe 'GCloud Function github_event_receive' do
     )
   end
 
+  let(:logger) do
+    logger = Ougai::Logger.new($stderr)
+    logger.level = :fatal
+    logger
+  end
+
   # @param req [Rack::Request]
   def create_function_object(req, topic)
     Pulljoy::App::GCloudFunctions::GithubEventReceiveFunction.new(
       req: req,
       config: PULLJOY_TEST_CONFIG,
-      topic: topic
+      logger: logger,
+      topic: topic,
     )
   end
 

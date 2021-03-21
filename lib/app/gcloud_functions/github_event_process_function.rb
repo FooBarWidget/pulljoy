@@ -15,6 +15,7 @@ module Pulljoy
           config_source = Boot.infer_config_source!
           @@config      = Boot.load_config!(config_source)
           @@octokit     = Boot.create_octokit(@@config)
+          @@logger      = Boot.create_logger(@@config)
           @@my_username = Boot.infer_github_username(@@octokit)
           @@state_store = Boot.create_state_store(@@config)
         end
@@ -24,7 +25,7 @@ module Pulljoy
             event: event,
             config: @@config,
             octokit: @@octokit,
-            logger: logger,
+            logger: @@logger,
             my_username: @@my_username,
             state_store: @@state_store,
           )
@@ -46,19 +47,26 @@ module Pulljoy
         end
 
         def process
-          payload = JSON.parse(@event.data)
-          payload_data_json = Base64.strict_decode64(payload['message']['data'])
-          payload_data_doc = JSON.parse(payload_data_json)
+          message_data, attributes = extract_event_info
+          @logger.info("Github event type: #{attributes['github_event_type'].inspect}")
 
           github_event = Pulljoy.parse_github_event_data(
-            payload['attributes']['github_event_type'],
-            payload_data_doc
+            attributes['github_event_type'],
+            message_data
           )
-          handler = create_event_handler
-          handler.process(github_event)
+          create_event_handler.process(github_event)
         end
 
         private
+
+        # @return [Array<(Hash, Hash)>]
+        def extract_event_info
+          payload = JSON.parse(@event.data)
+          message_data_raw = Base64.strict_decode64(payload['message']['data'])
+          message_data = JSON.parse(message_data_raw)
+          attributes = payload['attributes']
+          [message_data, attributes]
+        end
 
         # @return [Pulljoy::EventHandler]
         def create_event_handler

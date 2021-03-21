@@ -67,7 +67,7 @@ module Pulljoy
       end
 
       post '/receive_github_event' do
-        @logger.info("Github event type: #{github_event}")
+        @logger.info("Github event type: #{github_event.inspect}")
 
         return json(processed: true) if github_event == 'ping'
 
