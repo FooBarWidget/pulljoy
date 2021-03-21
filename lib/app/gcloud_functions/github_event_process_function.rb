@@ -33,6 +33,7 @@ module Pulljoy
         end
 
 
+        # @param event [CloudEvents::Event::V1]
         # @param config [Pulljoy::Config]
         # @param octokit [Octokit::Client]
         # @param my_username [String]
@@ -61,10 +62,9 @@ module Pulljoy
 
         # @return [Array<(Hash, Hash)>]
         def extract_event_info
-          payload = JSON.parse(@event.data)
-          message_data_raw = Base64.strict_decode64(payload['message']['data'])
+          message_data_raw = Base64.strict_decode64(@event.data['message']['data'])
           message_data = JSON.parse(message_data_raw)
-          attributes = payload['attributes']
+          attributes = @event.data['message']['attributes']
           [message_data, attributes]
         end
 

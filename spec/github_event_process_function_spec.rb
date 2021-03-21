@@ -51,14 +51,14 @@ describe 'GCloud Function github_event_process' do
   def create_function_object(github_event_type, github_event)
     event = double(
       'Event',
-      data: JSON.generate(
-        message: {
-          data: Base64.strict_encode64(JSON.generate(github_event.to_h)),
+      data: {
+        'message' => {
+          'data' => Base64.strict_encode64(JSON.generate(github_event.to_h)),
+          'attributes' => {
+            'github_event_type' => github_event_type,
+          },
         },
-        attributes: {
-          github_event_type: github_event_type,
-        },
-      ),
+      },
     )
     Pulljoy::App::GCloudFunctions::GithubEventProcessFunction.new(
       event: event,
