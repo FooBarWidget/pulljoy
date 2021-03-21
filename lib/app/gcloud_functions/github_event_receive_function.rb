@@ -104,12 +104,10 @@ module Pulljoy
 
         # @return [Array]
         def push_event_into_queue
-          @topic.publish_async(
+          @topic.publish(
             @body,
             { github_event_type: @event_type },
-            ordering_key: @event.ordering_key,
           )
-          @topic.async_publisher.stop!
           @logger.info('Pushed event into queue')
           json_response(200, processed: true)
         end

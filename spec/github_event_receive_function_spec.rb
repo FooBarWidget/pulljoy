@@ -98,15 +98,10 @@ describe 'GCloud Function github_event_receive' do
     )
 
     topic = double('Topic')
-    expect(topic).to receive(:publish_async).with(
+    expect(topic).to receive(:publish).with(
       body,
-      { github_event_type: 'pull_request' },
-      ordering_key: 'foo/foo/123'
+      github_event_type: 'pull_request',
     )
-
-    async_publisher = double('Topic::AsyncPublisher')
-    expect(async_publisher).to receive(:stop!)
-    expect(topic).to receive(:async_publisher).and_return(async_publisher)
 
     func = create_function_object(req, topic)
     status, _, body = func.process
