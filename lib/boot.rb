@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 require_relative 'config'
+require_relative 'utils'
 
 module Pulljoy
-  module Boot
+  module Boot # rubocop:disable Metrics/ModuleLength
     class << self
       def infer_config_source
         if (path = read_env_str('PULLJOY_CONFIG_PATH'))
@@ -52,6 +53,8 @@ module Pulljoy
       rescue Dry::Struct::Error => e
         $stderr.puts "Config file validation error: #{e}"
         abort
+      rescue => e # rubocop:disable Style/RescueStandardError
+        Pulljoy.abort_with_exception('Error loading configuration', e)
       end
 
       # @param config [Config]
@@ -60,6 +63,8 @@ module Pulljoy
         require 'octokit'
 
         Octokit::Client.new(access_token: config.github_access_token)
+      rescue => e # rubocop:disable Style/RescueStandardError
+        Pulljoy.abort_with_exception('Error initializing Octokit', e)
       end
 
       # @param config [Config]
@@ -74,6 +79,8 @@ module Pulljoy
           logger.formatter = Ougai::Formatters::Readable.new
         end
         logger
+      rescue => e # rubocop:disable Style/RescueStandardError
+        Pulljoy.abort_with_exception('Error initializing logger', e)
       end
 
       # @param octokit [Octokit::Client]
@@ -96,6 +103,8 @@ module Pulljoy
           require_relative 'state_store/memory_store'
           StateStore::MemoryStore.new
         end
+      rescue => e # rubocop:disable Style/RescueStandardError
+        Pulljoy.abort_with_exception('Error initializing state store', e)
       end
 
       # @param config [Config]
@@ -111,6 +120,8 @@ module Pulljoy
         topic = pubsub.topic(topic_name, async: async_options)
         topic.enable_message_ordering!
         topic
+      rescue => e # rubocop:disable Style/RescueStandardError
+        Pulljoy.abort_with_exception('Error initializing Google Cloud PubSub support', e)
       end
 
       private

@@ -9,6 +9,10 @@ module Pulljoy
     include Dry.Types()
   end
 
+  def self.abort_with_exception(context_message, exception)
+    abort("#{context_message}: #{format_error_and_backtrace(exception)}")
+  end
+
   def self.format_error_and_backtrace(exception)
     result = String.new("#{exception} (#{exception.class})\n")
     exception.backtrace.each do |line|
