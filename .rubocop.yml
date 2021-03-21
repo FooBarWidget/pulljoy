@@ -16,6 +16,9 @@ Style/SymbolProc:
   Enabled: false
 Style/SymbolArray:
   Enabled: false
+Style/ClassVars:
+  Exclude:
+    - lib/app/gcloud_functions/*
 Layout/EmptyLines:
   Enabled: false
 Layout/EmptyLineBetweenDefs:

@@ -33,6 +33,11 @@ module Pulljoy
 
   class GithubEvent < Dry::Struct
     transform_keys(&:to_sym)
+
+    # @return [String]
+    def ordering_key
+      raise NotImplementedError
+    end
   end
 
   class PullRequestEvent < GithubEvent
@@ -45,6 +50,10 @@ module Pulljoy
     attribute :repository, Repository
     attribute :user, User
     attribute :pull_request, PullRequest
+
+    def ordering_key
+      "#{repository.full_name}/#{pull_request.number}"
+    end
   end
 
   class IssueCommentEvent < GithubEvent
@@ -60,6 +69,10 @@ module Pulljoy
       attribute :id, Types::Strict::Integer
       attribute :body, Types::Strict::String
       attribute :user, User
+    end
+
+    def ordering_key
+      "#{repository.full_name}/#{issue.number}"
     end
   end
 
@@ -79,6 +92,12 @@ module Pulljoy
         attribute :number, Types::Strict::Integer
       end
     end
+
+    def ordering_key
+      first_pr_num = check_suite.pull_requests[0].number if check_suite.pull_requests.any?
+      "#{repository.full_name}/#{first_pr_num}"
+    end
+  end
 
 
   # @param event_type [String]

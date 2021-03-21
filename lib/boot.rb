@@ -98,6 +98,21 @@ module Pulljoy
         end
       end
 
+      # @param config [Config]
+      # @return [Google::Cloud::PubSub::Topic]
+      def create_gcloud_pubsub_topic(config, async_options: nil)
+        abort 'Configuration error: gcloud_pubsub must be set' if config.gcloud_pubsub.nil?
+
+        require 'google/cloud/pubsub'
+        topic_name  = config.gcloud_pubsub.topic_name
+        config_hash = config.gcloud_pubsub.to_h.dup
+        config_hash.delete(:topic_name)
+        pubsub = Google::Cloud::PubSub.new(**config_hash)
+        topic = pubsub.topic(topic_name, async: async_options)
+        topic.enable_message_ordering!
+        topic
+      end
+
       private
 
       def read_env_str(name)

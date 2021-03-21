@@ -2,6 +2,7 @@
 
 require 'dry-struct'
 require_relative 'state_store/google_fire_store_config'
+require_relative 'gcloud_pubsub_config'
 require_relative 'utils'
 
 module Pulljoy
@@ -28,5 +29,7 @@ module Pulljoy
     attribute? :state_store_config,
                StateStore::GoogleFireStoreConfig |
                Types::Strict::Nil
+
+    attribute? :gcloud_pubsub, GCloudPubSubConfig.optional
   end
 end
